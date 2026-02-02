@@ -42,7 +42,7 @@ CefSharp 的约 30% 代码使用 C++/CLI 编写，其余大部分使用 C# 编�
 ## 主要特性
 
 - ✅ **完整的 Chromium 内核** - 支持最新的 HTML5、CSS3、JavaScript 特性
-- ✅ **跨平台支持** - 支持 .NET Framework 4.6.2+ 和 .NET 6+
+- ✅ **多版本 .NET 支持** - 支持 .NET Framework 4.6.2+ 和 .NET 6+
 - ✅ **多种集成方式** - WinForms、WPF、OffScreen 渲染
 - ✅ **JavaScript 互操作** - C# 与 JavaScript 双向通信
 - ✅ **自定义请求处理** - 拦截和处理网络请求
@@ -55,12 +55,14 @@ CefSharp 的约 30% 代码使用 C++/CLI 编写，其余大部分使用 C# 编�
 ### .NET Framework 项目
 
 - **操作系统**: Windows 7 SP1 或更高版本
-- **.NET 版本**: .NET Framework 4.6.2 或更高版本
+- **.NET 版本**: .NET Framework 4.6.2 或更高版本（推荐 4.8）
 - **Visual C++ 运行时**:
   - 对于 CefSharp 版本 138 及以上: VC++ 2022 Redistributable
   - 对于 CefSharp 版本 92-137: VC++ 2019 Redistributable
   - 对于 CefSharp 版本 91 及以下: VC++ 2015 Redistributable
 - **架构**: x86、x64 或 ARM64
+
+> **注意**: CefSharp 仅支持 Windows 操作系统。最低要求为 .NET Framework 4.6.2，但建议使用 .NET Framework 4.8 以获得更好的性能和兼容性。
 
 ### .NET Core / .NET 6+ 项目
 
