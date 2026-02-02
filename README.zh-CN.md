@@ -104,7 +104,7 @@ Install-Package CefSharp.OffScreen
 ```xml
 <application xmlns="urn:schemas-microsoft-com:asm.v3">
   <windowsSettings>
-    <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/PM</dpiAware>
+    <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
     <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2, PerMonitor</dpiAwareness>
   </windowsSettings>
 </application>
@@ -1399,7 +1399,7 @@ CefSharp 使用 [BSD 3-Clause 许可证](LICENSE)，可以自由用于商业和�
 
 - **CEF**: [Chromium Embedded Framework](https://bitbucket.org/chromiumembedded/cef)
 - **CefGlue**: [基于 P/Invoke 的 CEF 封装](https://gitlab.com/xiliumhq/chromiumembedded/cefglue)
-- **Chromely**: [使用 CefSharp 构建跨平台桌面应用](https://github.com/chromelyapps/CefSharp)
+- **Chromely**: [使用 CEF 构建跨平台桌面应用](https://github.com/chromelyapps/Chromely)
 - **SharpBrowser**: [基于 CefSharp 的完整浏览器](https://github.com/sharpbrowser/SharpBrowser)
 
 ---
