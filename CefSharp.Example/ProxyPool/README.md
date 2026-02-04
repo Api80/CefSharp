@@ -105,16 +105,20 @@ if (result.Success)
 
 ## Health Checking
 
-The proxy pool automatically checks proxy health at regular intervals. Configure these properties after creating the pool:
+The proxy pool automatically checks proxy health at regular intervals. Configure these properties after creating the pool (preferably before adding proxies or before the first health check runs):
 
 ```csharp
 var proxyPool = new ProxyPool();
 
-// Configure health checking
+// Configure health checking (set before first health check for best results)
 proxyPool.EnableHealthCheck = true;
 proxyPool.HealthCheckInterval = 60000; // 1 minute in milliseconds
 proxyPool.HealthCheckUrl = "http://www.gstatic.com/generate_204";
 proxyPool.HealthCheckTimeout = 10; // seconds
+
+// Note: Health check timer starts immediately in constructor
+// Changing HealthCheckInterval after construction does not affect the current timer
+// You may need to recreate the pool if you need different intervals
 ```
 
 ## Best Practices
