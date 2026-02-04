@@ -1259,6 +1259,9 @@ public class Socks5ProxyBrowserForm : Form
         InitializeBrowser();
     }
     
+    /// <summary>
+    /// 初始化用户界面控件
+    /// </summary>
     private void InitializeUI()
     {
         this.Width = 1200;
@@ -1355,6 +1358,9 @@ public class Socks5ProxyBrowserForm : Form
         this.Controls.Add(toolPanel);
     }
     
+    /// <summary>
+    /// 初始化浏览器实例
+    /// </summary>
     private void InitializeBrowser()
     {
         _requestContext = new RequestContext();
@@ -1411,6 +1417,9 @@ public class Socks5ProxyBrowserForm : Form
         }
     }
     
+    /// <summary>
+    /// 清除代理设置
+    /// </summary>
     private async Task ClearProxyAsync()
     {
         try
