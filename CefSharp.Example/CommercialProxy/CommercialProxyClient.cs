@@ -16,10 +16,11 @@ namespace CefSharp.Example.CommercialProxy
     /// Commercial proxy service client for services like Siyetian (思叶天), Zhima, Kuai, etc.
     /// This example uses Siyetian API format as reference.
     /// </summary>
-    public class CommercialProxyClient
+    public class CommercialProxyClient : IDisposable
     {
         private readonly string _apiUrl;
         private readonly HttpClient _httpClient;
+        private bool _disposed = false;
 
         /// <summary>
         /// Constructor
@@ -144,13 +145,18 @@ namespace CefSharp.Example.CommercialProxy
             // Try parsing as timestamp (seconds)
             if (long.TryParse(expireStr, out long timestamp))
             {
-                return DateTimeOffset.FromUnixTimeSeconds(timestamp).DateTime;
+                return DateTimeOffset.FromUnixTimeSeconds(timestamp).UtcDateTime;
             }
 
-            // Try parsing as datetime
+            // Try parsing as datetime and convert to UTC
             if (DateTime.TryParse(expireStr, out DateTime dateTime))
             {
-                return dateTime;
+                // If the parsed datetime doesn't have timezone info, assume it's UTC
+                if (dateTime.Kind == DateTimeKind.Unspecified)
+                {
+                    return DateTime.SpecifyKind(dateTime, DateTimeKind.Utc);
+                }
+                return dateTime.ToUniversalTime();
             }
 
             return null;
@@ -179,6 +185,30 @@ namespace CefSharp.Example.CommercialProxy
             }
 
             return proxies;
+        }
+
+        /// <summary>
+        /// Dispose resources
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Dispose pattern implementation
+        /// </summary>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    _httpClient?.Dispose();
+                }
+                _disposed = true;
+            }
         }
     }
 
@@ -222,7 +252,7 @@ namespace CefSharp.Example.CommercialProxy
         {
             get
             {
-                return ExpireTime.HasValue && ExpireTime.Value <= DateTime.Now;
+                return ExpireTime.HasValue && ExpireTime.Value <= DateTime.UtcNow;
             }
         }
 

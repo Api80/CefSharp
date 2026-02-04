@@ -34,24 +34,25 @@ Compatible with:
 using CefSharp.Example.CommercialProxy;
 
 // 1. Create client with your API URL
-var client = new CommercialProxyClient("https://api.siyetian.com/get?type=http&num=1&key=YOUR_KEY");
-
-// 2. Fetch a proxy
-var proxy = await client.GetProxyAsync();
-
-if (proxy != null)
+using (var client = new CommercialProxyClient("https://api.siyetian.com/get?type=http&num=1&key=YOUR_KEY"))
 {
-    Console.WriteLine($"Got proxy: {proxy.Host}:{proxy.Port}");
-    
-    // 3. Configure CefSharp
-    var requestContext = new RequestContext();
-    await requestContext.SetProxyAsync(proxy.Scheme, proxy.Host, proxy.Port);
-    
-    // 4. Create browser with proxy
-    var browser = new ChromiumWebBrowser("https://www.example.com")
+    // 2. Fetch a proxy
+    var proxy = await client.GetProxyAsync();
+
+    if (proxy != null)
     {
-        RequestContext = requestContext
-    };
+        Console.WriteLine($"Got proxy: {proxy.Host}:{proxy.Port}");
+        
+        // 3. Configure CefSharp
+        var requestContext = new RequestContext();
+        await requestContext.SetProxyAsync(proxy.Scheme, proxy.Host, proxy.Port);
+        
+        // 4. Create browser with proxy
+        var browser = new ChromiumWebBrowser("https://www.example.com")
+        {
+            RequestContext = requestContext
+        };
+    }
 }
 ```
 
@@ -175,7 +176,7 @@ See `README.zh-CN.md` in the repository root for a complete WinForms application
 
 All classes in this implementation are thread-safe:
 
-- `CommercialProxyClient`: Can be called from multiple threads
+- `CommercialProxyClient`: Can be called from multiple threads; implements IDisposable for proper resource cleanup
 - `CommercialProxyRotator`: Uses locks for safe concurrent access
 - `ProxyAddress`: Immutable data class
 
@@ -185,6 +186,8 @@ All classes in this implementation are thread-safe:
 2. **Timeout Settings**: 10-second timeout prevents hanging
 3. **Delayed Requests**: 1-second delay between batch proxy fetches
 4. **Lazy Evaluation**: Proxies checked for expiration only when accessed
+5. **UTC Timestamps**: All time comparisons use UTC for consistency across timezones
+6. **Resource Disposal**: CommercialProxyClient implements IDisposable for proper cleanup
 
 ## Troubleshooting
 
