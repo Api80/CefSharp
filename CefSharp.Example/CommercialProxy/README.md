@@ -1,6 +1,6 @@
 # CefSharp.Example - Commercial Proxy Integration
 
-This directory contains examples for integrating commercial proxy services (like Siyetian 思叶天) with CefSharp.
+This directory contains examples for integrating commercial proxy services (like Siyetian 思叶天) with CefSharp, including support for authenticated proxies.
 
 ## Overview
 
@@ -8,9 +8,50 @@ Commercial proxy services provide rotating IP addresses through APIs. This imple
 
 - Fetching proxies from API endpoints
 - Parsing both JSON and plain text responses
+- **Authenticated proxies in `user:pass@host:port` format**
 - Automatic proxy rotation
 - Expired proxy detection
 - Thread-safe proxy management
+
+## Important: Authenticated Proxy Configuration
+
+Many commercial proxy services (like Siyetian) provide proxy addresses in the format:
+```
+username:password@host:port
+```
+
+**Critical Note:** Chromium does **NOT** support `username:password@host:port` directly in command-line arguments. You must handle it in two steps:
+
+1. **Set proxy server address** (`host:port`) via `CefSettings` or `RequestContext.SetProxyAsync`
+2. **Handle authentication** (`username:password`) via `GetAuthCredentials` in a custom `RequestHandler`
+
+### Example: Parsing and Using Authenticated Proxies
+
+```csharp
+using CefSharp.Example.CommercialProxy;
+
+// Parse proxy string like "22VWD-1:531246@sk1.siyetian.com:6153"
+var proxyInfo = ProxyAuthHelper.Parse("22VWD-1:531246@sk1.siyetian.com:6153");
+
+// Step 1: Set proxy server address (without credentials)
+var requestContext = new RequestContext();
+await requestContext.SetProxyAsync("http", proxyInfo.Host, proxyInfo.Port);
+
+// Step 2: Set up authentication handler
+var browser = new ChromiumWebBrowser("https://www.example.com")
+{
+    RequestContext = requestContext,
+    RequestHandler = new ProxyAuthRequestHandler(proxyInfo)
+};
+```
+
+See `ProxyAuthHelper.cs` for the complete implementation.
+
+## Files
+
+- `CommercialProxyClient.cs` - Client for fetching proxies from commercial APIs
+- `ProxyAuthHelper.cs` - Helper for parsing and managing authenticated proxies (`user:pass@host:port`)
+- `README.md` - This file
 
 ## Supported Services
 
@@ -71,6 +112,100 @@ var proxy = rotator.GetNextProxy();
 // Check status
 Console.WriteLine($"Loaded: {rotator.ProxyCount}, Available: {rotator.AvailableProxyCount}");
 ```
+
+### Authenticated Proxies (user:pass@host:port)
+
+Many commercial proxy services provide credentials in the format `username:password@host:port`. For example, Siyetian might provide:
+
+```
+22VWD-1:531246@sk1.siyetian.com:6153
+```
+
+**Important:** You cannot use this format directly in CefSharp. Instead:
+
+#### Step 1: Parse the proxy string
+
+```csharp
+using CefSharp.Example.CommercialProxy;
+
+string proxyString = "22VWD-1:531246@sk1.siyetian.com:6153";
+var proxyInfo = ProxyAuthHelper.Parse(proxyString);
+
+Console.WriteLine($"Server: {proxyInfo.Host}:{proxyInfo.Port}");
+Console.WriteLine($"Username: {proxyInfo.Username}");
+// Password is stored but not displayed for security
+```
+
+#### Step 2: Configure proxy server address
+
+```csharp
+// For global proxy (at startup)
+var settings = new CefSettings();
+settings.CefCommandLineArgs.Add("proxy-server", proxyInfo.GetServerAddress());
+Cef.Initialize(settings);
+
+// OR for dynamic proxy (runtime)
+var requestContext = new RequestContext();
+await requestContext.SetProxyAsync("http", proxyInfo.Host, proxyInfo.Port);
+```
+
+#### Step 3: Set up authentication handler
+
+```csharp
+// Create browser with authentication
+var browser = new ChromiumWebBrowser("https://www.example.com")
+{
+    RequestContext = requestContext,  // Use the context with proxy configured
+    RequestHandler = new ProxyAuthRequestHandler(proxyInfo)  // Handle authentication
+};
+
+// OR pass credentials directly
+browser.RequestHandler = new ProxyAuthRequestHandler(
+    proxyInfo.Username, 
+    proxyInfo.Password
+);
+```
+
+#### Complete Example
+
+```csharp
+public async Task SetupAuthenticatedProxy()
+{
+    // Parse the full proxy string
+    var proxyInfo = ProxyAuthHelper.Parse("22VWD-1:531246@sk1.siyetian.com:6153");
+    
+    // Configure proxy server
+    var requestContext = new RequestContext();
+    var result = await requestContext.SetProxyAsync("http", proxyInfo.Host, proxyInfo.Port);
+    
+    if (!result.Success)
+    {
+        Console.WriteLine($"Failed to set proxy: {result.ErrorMessage}");
+        return;
+    }
+    
+    // Create browser with auth handler
+    var browser = new ChromiumWebBrowser("https://www.baidu.com")
+    {
+        RequestContext = requestContext,
+        RequestHandler = new ProxyAuthRequestHandler(proxyInfo)
+    };
+    
+    Console.WriteLine("Proxy configured successfully!");
+}
+```
+
+### Why Two Steps?
+
+Chromium's security model prevents passing credentials via command-line arguments to avoid exposing passwords. The two-step process:
+
+1. **Proxy Server Configuration**: Tells Chromium where to connect
+2. **Authentication Handler**: Responds when the proxy server returns a 407 (Proxy Authentication Required) status
+
+When the proxy server requests authentication:
+- `GetAuthCredentials` is called with `isProxy=true`
+- The handler provides the username and password
+- Chromium completes the authentication automatically
 
 ### Automatic Failover
 

@@ -1203,6 +1203,458 @@ public async Task ConfigureAuthenticatedProxy()
 }
 ```
 
+**方法三：处理 `user:pass@host:port` 格式的代理**
+
+许多代理服务（如思叶天）提供形如 `username:password@host:port` 的代理地址。**重要提示**：Chromium **不支持**在命令行参数中直接使用 `username:password@host:port` 格式，必须分成两步处理：
+
+1. **第一步**：设置代理服务器地址 (`host:port`)
+2. **第二步**：通过 `RequestHandler` 处理身份验证 (`username:password`)
+
+以下是完整的解决方案：
+
+```csharp
+using System;
+using CefSharp;
+using CefSharp.Handler;
+using CefSharp.WinForms;
+
+/// <summary>
+/// 代理认证辅助类
+/// 用于解析和管理 user:pass@host:port 格式的代理
+/// </summary>
+public class ProxyAuthHelper
+{
+    public string Host { get; set; }
+    public int Port { get; set; }
+    public string Username { get; set; }
+    public string Password { get; set; }
+    
+    /// <summary>
+    /// 解析 user:pass@host:port 格式的代理字符串
+    /// 例如: "22VWD-1:531246@sk1.siyetian.com:6153"
+    /// </summary>
+    public static ProxyAuthHelper Parse(string proxyString)
+    {
+        if (string.IsNullOrWhiteSpace(proxyString))
+            throw new ArgumentException("代理字符串不能为空", nameof(proxyString));
+        
+        // 按 @ 分割成认证部分和服务器部分
+        var parts = proxyString.Split('@');
+        if (parts.Length != 2)
+            throw new ArgumentException("代理格式错误，应为 user:pass@host:port", nameof(proxyString));
+        
+        var authPart = parts[0];    // user:pass
+        var serverPart = parts[1];  // host:port
+        
+        // 解析认证信息
+        var authParts = authPart.Split(':');
+        if (authParts.Length != 2)
+            throw new ArgumentException("认证格式错误，应为 username:password", nameof(proxyString));
+        
+        // 解析服务器地址
+        var serverParts = serverPart.Split(':');
+        if (serverParts.Length != 2)
+            throw new ArgumentException("服务器格式错误，应为 host:port", nameof(proxyString));
+        
+        return new ProxyAuthHelper
+        {
+            Username = authParts[0],
+            Password = authParts[1],
+            Host = serverParts[0],
+            Port = int.Parse(serverParts[1])
+        };
+    }
+    
+    /// <summary>
+    /// 获取服务器地址（不含认证信息）
+    /// 格式: host:port
+    /// </summary>
+    public string GetServerAddress()
+    {
+        return $"{Host}:{Port}";
+    }
+}
+
+/// <summary>
+/// 代理认证请求处理器
+/// </summary>
+public class ProxyAuthRequestHandler : RequestHandler
+{
+    private readonly string _username;
+    private readonly string _password;
+    
+    public ProxyAuthRequestHandler(string username, string password)
+    {
+        _username = username;
+        _password = password;
+    }
+    
+    protected override bool GetAuthCredentials(
+        IWebBrowser chromiumWebBrowser, 
+        IBrowser browser, 
+        string originUrl, 
+        bool isProxy, 
+        string host, 
+        int port, 
+        string realm, 
+        string scheme, 
+        IAuthCallback callback)
+    {
+        // 关键点：检查 isProxy 为 true，说明是代理服务器在要求认证
+        if (isProxy)
+        {
+            // 自动填入账号密码
+            callback.Continue(_username, _password);
+            return true; // 告诉 CefSharp 我们已经处理了认证
+        }
+        
+        // 如果是网站本身的弹窗验证，走默认逻辑
+        return base.GetAuthCredentials(chromiumWebBrowser, browser, originUrl, 
+            isProxy, host, port, realm, scheme, callback);
+    }
+}
+
+// ============== 使用示例 ==============
+
+/// <summary>
+/// 示例 1：全局代理配置（程序启动时）
+/// 适用于固定代理的场景
+/// </summary>
+public class GlobalProxyExample
+{
+    public void ConfigureGlobalProxy()
+    {
+        // 1. 解析代理字符串（思叶天格式示例）
+        string proxyString = "22VWD-1:531246@sk1.siyetian.com:6153";
+        var proxyInfo = ProxyAuthHelper.Parse(proxyString);
+        
+        Console.WriteLine($"代理服务器: {proxyInfo.Host}:{proxyInfo.Port}");
+        Console.WriteLine($"用户名: {proxyInfo.Username}");
+        
+        // 2. 设置 Cef 全局代理（只设置服务器地址，不包含用户名密码）
+        var settings = new CefSettings();
+        settings.CefCommandLineArgs.Add("proxy-server", proxyInfo.GetServerAddress());
+        
+        // 3. 初始化 CefSharp
+        Cef.Initialize(settings);
+        
+        // 4. 创建浏览器并设置认证处理器
+        var browser = new ChromiumWebBrowser("https://www.baidu.com");
+        // 【关键】将用户名密码传给 RequestHandler
+        browser.RequestHandler = new ProxyAuthRequestHandler(
+            proxyInfo.Username, 
+            proxyInfo.Password
+        );
+        
+        // 添加到窗体
+        // this.Controls.Add(browser);
+    }
+}
+
+/// <summary>
+/// 示例 2：动态代理配置（运行时切换）
+/// 适用于需要切换代理的场景
+/// </summary>
+public class DynamicProxyExample
+{
+    private ChromiumWebBrowser _browser;
+    private IRequestContext _requestContext;
+    
+    public async Task ConfigureDynamicProxyAsync()
+    {
+        // 1. 解析代理字符串
+        string proxyString = "22VWD-1:531246@sk1.siyetian.com:6153";
+        var proxyInfo = ProxyAuthHelper.Parse(proxyString);
+        
+        // 2. 创建请求上下文
+        _requestContext = new RequestContext();
+        
+        // 3. 设置代理（只设置服务器地址）
+        var result = await _requestContext.SetProxyAsync(
+            "http",              // 协议
+            proxyInfo.Host,      // 主机
+            proxyInfo.Port       // 端口
+        );
+        
+        if (!result.Success)
+        {
+            Console.WriteLine($"代理设置失败: {result.ErrorMessage}");
+            return;
+        }
+        
+        Console.WriteLine("代理设置成功");
+        
+        // 4. 创建浏览器
+        _browser = new ChromiumWebBrowser("https://www.baidu.com")
+        {
+            RequestContext = _requestContext,
+            // 【关键】设置认证处理器
+            RequestHandler = new ProxyAuthRequestHandler(
+                proxyInfo.Username, 
+                proxyInfo.Password
+            )
+        };
+        
+        // 添加到窗体
+        // this.Controls.Add(_browser);
+    }
+    
+    /// <summary>
+    /// 切换到新的代理
+    /// </summary>
+    public async Task SwitchProxyAsync(string newProxyString)
+    {
+        var proxyInfo = ProxyAuthHelper.Parse(newProxyString);
+        
+        // 更新代理设置
+        await _requestContext.SetProxyAsync(
+            "http", 
+            proxyInfo.Host, 
+            proxyInfo.Port
+        );
+        
+        // 更新认证处理器
+        _browser.RequestHandler = new ProxyAuthRequestHandler(
+            proxyInfo.Username, 
+            proxyInfo.Password
+        );
+        
+        // 重新加载当前页面以使用新代理
+        _browser.Reload();
+    }
+}
+
+/// <summary>
+/// 示例 3：完整的 WinForms 应用程序
+/// </summary>
+public class AuthProxyBrowserForm : Form
+{
+    private ChromiumWebBrowser _browser;
+    private IRequestContext _requestContext;
+    private TextBox _proxyTextBox;
+    private Button _setProxyButton;
+    private TextBox _urlTextBox;
+    private Button _goButton;
+    private Label _statusLabel;
+    
+    public AuthProxyBrowserForm()
+    {
+        InitializeUI();
+        InitializeBrowser();
+    }
+    
+    private void InitializeUI()
+    {
+        this.Width = 1200;
+        this.Height = 800;
+        this.Text = "CefSharp - 带认证的代理示例";
+        
+        var toolPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 100
+        };
+        
+        // 代理输入
+        var proxyLabel = new Label
+        {
+            Text = "代理地址 (user:pass@host:port):",
+            Location = new System.Drawing.Point(10, 10),
+            Width = 200
+        };
+        
+        _proxyTextBox = new TextBox
+        {
+            Location = new System.Drawing.Point(220, 8),
+            Width = 400,
+            Text = "22VWD-1:531246@sk1.siyetian.com:6153"
+        };
+        
+        _setProxyButton = new Button
+        {
+            Text = "设置代理",
+            Location = new System.Drawing.Point(630, 6),
+            Width = 80
+        };
+        _setProxyButton.Click += async (s, e) => await SetProxyAsync();
+        
+        // URL 输入
+        var urlLabel = new Label
+        {
+            Text = "访问地址:",
+            Location = new System.Drawing.Point(10, 45),
+            Width = 80
+        };
+        
+        _urlTextBox = new TextBox
+        {
+            Location = new System.Drawing.Point(100, 43),
+            Width = 520,
+            Text = "https://www.baidu.com"
+        };
+        
+        _goButton = new Button
+        {
+            Text = "访问",
+            Location = new System.Drawing.Point(630, 41),
+            Width = 80
+        };
+        _goButton.Click += (s, e) => _browser?.Load(_urlTextBox.Text);
+        
+        // 状态标签
+        _statusLabel = new Label
+        {
+            Location = new System.Drawing.Point(10, 75),
+            Width = 700,
+            Text = "请输入代理地址并点击'设置代理'"
+        };
+        
+        toolPanel.Controls.AddRange(new Control[] {
+            proxyLabel, _proxyTextBox, _setProxyButton,
+            urlLabel, _urlTextBox, _goButton,
+            _statusLabel
+        });
+        
+        this.Controls.Add(toolPanel);
+    }
+    
+    private void InitializeBrowser()
+    {
+        _requestContext = new RequestContext();
+        
+        _browser = new ChromiumWebBrowser("")
+        {
+            Dock = DockStyle.Fill,
+            RequestContext = _requestContext
+        };
+        
+        _browser.LoadingStateChanged += OnLoadingStateChanged;
+        
+        this.Controls.Add(_browser);
+    }
+    
+    private async Task SetProxyAsync()
+    {
+        try
+        {
+            _setProxyButton.Enabled = false;
+            _statusLabel.Text = "正在设置代理...";
+            
+            // 解析代理字符串
+            var proxyInfo = ProxyAuthHelper.Parse(_proxyTextBox.Text);
+            
+            // 设置代理服务器
+            var result = await _requestContext.SetProxyAsync(
+                "http", 
+                proxyInfo.Host, 
+                proxyInfo.Port
+            );
+            
+            if (!result.Success)
+            {
+                _statusLabel.Text = $"代理设置失败: {result.ErrorMessage}";
+                MessageBox.Show($"代理设置失败: {result.ErrorMessage}", "错误");
+                return;
+            }
+            
+            // 设置认证处理器
+            _browser.RequestHandler = new ProxyAuthRequestHandler(
+                proxyInfo.Username, 
+                proxyInfo.Password
+            );
+            
+            _statusLabel.Text = $"代理设置成功: {proxyInfo.GetServerAddress()} (用户: {proxyInfo.Username})";
+            
+            // 如果已经有页面，重新加载
+            if (!string.IsNullOrEmpty(_browser.Address))
+            {
+                _browser.Reload();
+            }
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = $"错误: {ex.Message}";
+            MessageBox.Show($"设置代理失败: {ex.Message}", "错误");
+        }
+        finally
+        {
+            _setProxyButton.Enabled = true;
+        }
+    }
+    
+    private void OnLoadingStateChanged(object sender, LoadingStateChangedEventArgs e)
+    {
+        if (!e.IsLoading)
+        {
+            this.Invoke(new Action(() =>
+            {
+                _statusLabel.Text = $"页面加载完成: {_browser.Address}";
+            }));
+        }
+    }
+    
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _browser?.Dispose();
+        _requestContext?.Dispose();
+        base.OnFormClosing(e);
+    }
+}
+
+// ============== 使用主程序 ==============
+public class Program
+{
+    [STAThread]
+    static void Main()
+    {
+        // 如果使用全局代理配置
+        // var example = new GlobalProxyExample();
+        // example.ConfigureGlobalProxy();
+        
+        // 如果使用动态代理配置（推荐）
+        var settings = new CefSettings();
+        Cef.Initialize(settings);
+        
+        Application.EnableVisualStyles();
+        Application.Run(new AuthProxyBrowserForm());
+        
+        Cef.Shutdown();
+    }
+}
+```
+
+**重要说明**：
+
+1. **为什么不能直接使用 `user:pass@host:port`？**
+   - Chromium 的命令行参数 `--proxy-server` 不支持包含用户名和密码
+   - 这是 Chromium 的安全设计，避免密码暴露在命令行中
+   
+2. **两步配置的原理**：
+   - 第一步：通过命令行参数或 API 告诉 Chromium 代理服务器地址
+   - 第二步：当代理服务器返回 407 状态码（需要认证）时，`GetAuthCredentials` 会被调用
+   - 在 `GetAuthCredentials` 中检查 `isProxy` 参数为 `true`，然后提供用户名密码
+
+3. **全局 vs 动态配置**：
+   - **全局配置**：适用于程序启动时就确定代理，所有浏览器实例共享
+   - **动态配置**：适用于运行时切换代理，每个浏览器可以有不同的代理
+
+4. **思叶天代理格式**：
+   - 思叶天通常提供 `username:password@host:port` 格式
+   - 使用 `ProxyAuthHelper.Parse()` 方法可以轻松解析
+   - 示例：`22VWD-1:531246@sk1.siyetian.com:6153`
+
+5. **常见问题**：
+   - **Q**: 为什么页面加载很慢？
+   - **A**: 检查代理服务器是否正常，尝试在浏览器中手动配置相同代理测试
+   
+   - **Q**: 认证失败怎么办？
+   - **A**: 确认用户名密码正确，检查代理服务是否启用了 IP 白名单
+   
+   - **Q**: 如何判断是否在使用代理？
+   - **A**: 访问 `https://api.ipify.org` 或 `https://www.whatismyip.com` 查看当前 IP
+
+
+
 #### 2. 从 API 获取代理地址
 
 大多数商业代理服务提供 API 来获取代理地址。以下是完整的集成示例：
