@@ -1376,6 +1376,9 @@ public class Socks5ProxyBrowserForm : Form
         this.Controls.Add(_browser);
     }
     
+    /// <summary>
+    /// 根据用户输入设置代理配置
+    /// </summary>
     private async Task SetProxyAsync()
     {
         try
@@ -1449,6 +1452,9 @@ public class Socks5ProxyBrowserForm : Form
         }
     }
     
+    /// <summary>
+    /// 处理浏览器加载状态变化，更新状态标签
+    /// </summary>
     private void OnLoadingStateChanged(object sender, LoadingStateChangedEventArgs e)
     {
         if (!e.IsLoading)
