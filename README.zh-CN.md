@@ -1421,6 +1421,18 @@ public class ProxyPool
     }
     
     /// <summary>
+    /// 清除所有代理
+    /// </summary>
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            _proxies.Clear();
+            _currentIndex = 0;
+        }
+    }
+    
+    /// <summary>
     /// 获取代理池统计信息
     /// </summary>
     public ProxyPoolStatistics GetStatistics()
@@ -1435,6 +1447,14 @@ public class ProxyPool
                 AverageFailureCount = _proxies.Any() ? _proxies.Average(p => p.FailureCount) : 0
             };
         }
+    }
+    
+    /// <summary>
+    /// 释放资源
+    /// </summary>
+    public void Dispose()
+    {
+        _healthCheckTimer?.Dispose();
     }
 }
 
@@ -1687,7 +1707,7 @@ public class ProxyPoolExampleForm : Form
         };
         statsButton.Click += (s, e) => 
         {
-            MessageBox.Show(_proxyPool.GetStatistics(), "代理池统计");
+            MessageBox.Show(_proxyPool.GetStatistics().ToString(), "代理池统计");
         };
         
         toolbar.Controls.AddRange(new Control[] { 
