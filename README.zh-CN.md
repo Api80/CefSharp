@@ -1218,7 +1218,7 @@ using CefSharp.WinForms;
 /// <summary>
 /// 商业代理服务客户端（以思叶天为例）
 /// </summary>
-public class SiyetianProxyClient
+public class SiyetianProxyClient : IDisposable
 {
     private readonly string _apiUrl;
     private readonly HttpClient _httpClient;
@@ -1257,6 +1257,11 @@ public class SiyetianProxyClient
             return null;
         }
     }
+    
+    public void Dispose()
+    {
+        _httpClient?.Dispose();
+    }
 }
 
 // API 响应模型（根据实际API调整）
@@ -1280,11 +1285,11 @@ public class SiyetianProxyExample
 {
     public async Task ConfigureProxyFromApi()
     {
-        // 1. 创建代理客户端（使用您的API地址）
-        var proxyClient = new SiyetianProxyClient("https://api.siyetian.com/get?type=http&num=1");
-        
-        // 2. 获取代理地址
-        var proxy = await proxyClient.GetProxyAsync();
+        // 1. 创建代理客户端（使用您的API地址，需替换 YOUR_KEY 为实际密钥）
+        using (var proxyClient = new SiyetianProxyClient("https://api.siyetian.com/get?type=http&num=1&key=YOUR_KEY"))
+        {
+            // 2. 获取代理地址
+            var proxy = await proxyClient.GetProxyAsync();
         
         if (proxy == null)
         {
@@ -1314,7 +1319,6 @@ public class SiyetianProxyExample
         }
     }
 }
-```
 
 #### 3. 自动轮换商业代理
 
@@ -1409,8 +1413,8 @@ public class CommercialProxyRotationExample
     
     public async Task InitializeAsync()
     {
-        // 1. 创建轮换器
-        _rotator = new CommercialProxyRotator("https://api.siyetian.com/get?type=http&num=1");
+        // 1. 创建轮换器（需替换 YOUR_KEY 为实际密钥）
+        _rotator = new CommercialProxyRotator("https://api.siyetian.com/get?type=http&num=1&key=YOUR_KEY");
         
         // 2. 加载代理
         bool loaded = await _rotator.LoadProxiesAsync(5);
@@ -1532,7 +1536,7 @@ public class CommercialProxyBrowserForm : Form
         {
             Location = new System.Drawing.Point(120, 8),
             Width = 600,
-            Text = "https://api.siyetian.com/get?type=http&num=1"
+            Text = "https://api.siyetian.com/get?type=http&num=1&key=YOUR_KEY"
         };
         
         _loadProxiesButton = new Button

@@ -1,4 +1,4 @@
-# CefSharp Commercial Proxy Integration
+# CefSharp.Example - Commercial Proxy Integration
 
 This directory contains examples for integrating commercial proxy services (like Siyetian 思叶天) with CefSharp.
 
