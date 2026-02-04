@@ -25,6 +25,7 @@
   - [右键菜单](#右键菜单)
   - [Cookie 管理](#cookie-管理)
   - [代理设置](#代理设置)
+  - [商业代理服务配置](#商业代理服务配置)
   - [IP 代理池集成](#ip-代理池集成)
   - [截图功能](#截图功能)
   - [打印 PDF](#打印-pdf)
@@ -1087,6 +1088,686 @@ using (var requestContext = new RequestContext(requestContextSettings))
 
 // 清除代理
 await requestContext.SetProxyAsync(null, null);
+```
+
+### 商业代理服务配置
+
+许多开发者使用商业代理服务（如思叶天、芝麻代理、快代理等）。以下是如何在 CefSharp 中配置这些服务的详细指南。
+
+#### 1. 基本配置方法
+
+**方法一：直接使用代理地址**
+
+如果代理服务提供了固定的代理地址和端口：
+
+```csharp
+using CefSharp;
+using CefSharp.WinForms;
+
+public async Task ConfigureCommercialProxy()
+{
+    // 示例：思叶天代理地址格式通常为 IP:端口
+    // 例如: 123.45.67.89:8080
+    
+    var requestContextSettings = new RequestContextSettings
+    {
+        CachePath = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "CefSharp", "ProxyCache"
+        )
+    };
+    
+    var requestContext = new RequestContext(requestContextSettings);
+    
+    // 配置代理（替换为您从思叶天获取的实际代理地址）
+    var proxyHost = "123.45.67.89";  // 您的代理IP
+    var proxyPort = 8080;             // 您的代理端口
+    
+    var result = await requestContext.SetProxyAsync("http", proxyHost, proxyPort);
+    
+    if (result.Success)
+    {
+        Console.WriteLine("代理设置成功");
+        
+        // 创建浏览器并使用代理
+        var browser = new ChromiumWebBrowser("https://www.baidu.com")
+        {
+            RequestContext = requestContext
+        };
+        
+        // 添加到窗体
+        // this.Controls.Add(browser);
+    }
+    else
+    {
+        Console.WriteLine($"代理设置失败: {result.ErrorMessage}");
+    }
+}
+```
+
+**方法二：使用代理认证**
+
+如果代理需要用户名和密码认证（思叶天通常支持白名单IP，也可以使用用户名密码认证）：
+
+```csharp
+using CefSharp;
+using CefSharp.Handler;
+
+public class CommercialProxyRequestHandler : RequestHandler
+{
+    private string _username;
+    private string _password;
+    
+    public CommercialProxyRequestHandler(string username, string password)
+    {
+        _username = username;
+        _password = password;
+    }
+    
+    protected override bool GetAuthCredentials(
+        IWebBrowser chromiumWebBrowser, 
+        IBrowser browser, 
+        string originUrl, 
+        bool isProxy, 
+        string host, 
+        int port, 
+        string realm, 
+        string scheme, 
+        IAuthCallback callback)
+    {
+        if (isProxy)
+        {
+            // 提供代理认证信息
+            callback.Continue(_username, _password);
+            return true;
+        }
+        
+        return false;
+    }
+}
+
+// 使用方法
+public async Task ConfigureAuthenticatedProxy()
+{
+    var requestContext = new RequestContext();
+    
+    // 设置代理
+    await requestContext.SetProxyAsync("http", "your-proxy-ip.com", 8080);
+    
+    // 创建浏览器
+    var browser = new ChromiumWebBrowser("https://www.baidu.com")
+    {
+        RequestContext = requestContext,
+        RequestHandler = new CommercialProxyRequestHandler("your_username", "your_password")
+    };
+}
+```
+
+#### 2. 从 API 获取代理地址
+
+大多数商业代理服务提供 API 来获取代理地址。以下是完整的集成示例：
+
+```csharp
+using System;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Text.Json;
+using CefSharp;
+using CefSharp.WinForms;
+
+/// <summary>
+/// 商业代理服务客户端（以思叶天为例）
+/// </summary>
+public class SiyetianProxyClient
+{
+    private readonly string _apiUrl;
+    private readonly HttpClient _httpClient;
+    
+    public SiyetianProxyClient(string apiUrl)
+    {
+        _apiUrl = apiUrl;
+        _httpClient = new HttpClient();
+    }
+    
+    /// <summary>
+    /// 从 API 获取代理地址
+    /// </summary>
+    public async Task<ProxyAddress> GetProxyAsync()
+    {
+        try
+        {
+            // 调用代理服务API获取代理地址
+            // 实际 API 格式需要参考思叶天的API文档
+            var response = await _httpClient.GetStringAsync(_apiUrl);
+            
+            // 解析响应 - 格式示例: {"ip":"123.45.67.89","port":8080}
+            // 实际格式可能不同，需要根据API文档调整
+            var proxyData = JsonSerializer.Deserialize<ProxyApiResponse>(response);
+            
+            return new ProxyAddress
+            {
+                Host = proxyData.Ip,
+                Port = proxyData.Port,
+                Scheme = "http"
+            };
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"获取代理失败: {ex.Message}");
+            return null;
+        }
+    }
+}
+
+// API 响应模型（根据实际API调整）
+public class ProxyApiResponse
+{
+    public string Ip { get; set; }
+    public int Port { get; set; }
+    public string Expire { get; set; }  // 过期时间
+}
+
+// 代理地址模型
+public class ProxyAddress
+{
+    public string Host { get; set; }
+    public int Port { get; set; }
+    public string Scheme { get; set; }
+}
+
+// 使用示例
+public class SiyetianProxyExample
+{
+    public async Task ConfigureProxyFromApi()
+    {
+        // 1. 创建代理客户端（使用您的API地址）
+        var proxyClient = new SiyetianProxyClient("https://api.siyetian.com/get?type=http&num=1");
+        
+        // 2. 获取代理地址
+        var proxy = await proxyClient.GetProxyAsync();
+        
+        if (proxy == null)
+        {
+            Console.WriteLine("无法获取代理地址");
+            return;
+        }
+        
+        Console.WriteLine($"获取到代理: {proxy.Host}:{proxy.Port}");
+        
+        // 3. 配置 CefSharp 使用代理
+        var requestContext = new RequestContext();
+        var result = await requestContext.SetProxyAsync(proxy.Scheme, proxy.Host, proxy.Port);
+        
+        if (result.Success)
+        {
+            // 4. 创建浏览器
+            var browser = new ChromiumWebBrowser("https://www.baidu.com")
+            {
+                RequestContext = requestContext
+            };
+            
+            Console.WriteLine("代理配置成功，浏览器已创建");
+        }
+        else
+        {
+            Console.WriteLine($"代理配置失败: {result.ErrorMessage}");
+        }
+    }
+}
+```
+
+#### 3. 自动轮换商业代理
+
+如果您购买了多个代理或有代理池，可以实现自动轮换：
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Linq;
+
+/// <summary>
+/// 商业代理轮换管理器
+/// </summary>
+public class CommercialProxyRotator
+{
+    private List<ProxyAddress> _proxies = new List<ProxyAddress>();
+    private int _currentIndex = 0;
+    private readonly SiyetianProxyClient _apiClient;
+    
+    public CommercialProxyRotator(string apiUrl)
+    {
+        _apiClient = new SiyetianProxyClient(apiUrl);
+    }
+    
+    /// <summary>
+    /// 从API获取指定数量的代理
+    /// </summary>
+    public async Task<bool> LoadProxiesAsync(int count = 5)
+    {
+        _proxies.Clear();
+        
+        for (int i = 0; i < count; i++)
+        {
+            var proxy = await _apiClient.GetProxyAsync();
+            if (proxy != null)
+            {
+                _proxies.Add(proxy);
+                Console.WriteLine($"已加载代理 {i + 1}/{count}: {proxy.Host}:{proxy.Port}");
+            }
+            
+            // 避免请求过快，稍作延迟
+            await Task.Delay(1000);
+        }
+        
+        return _proxies.Any();
+    }
+    
+    /// <summary>
+    /// 获取下一个代理
+    /// </summary>
+    public ProxyAddress GetNextProxy()
+    {
+        if (!_proxies.Any())
+            return null;
+        
+        var proxy = _proxies[_currentIndex];
+        _currentIndex = (_currentIndex + 1) % _proxies.Count;
+        
+        return proxy;
+    }
+    
+    /// <summary>
+    /// 刷新单个失效的代理
+    /// </summary>
+    public async Task<bool> RefreshProxyAsync(ProxyAddress failedProxy)
+    {
+        var newProxy = await _apiClient.GetProxyAsync();
+        if (newProxy != null)
+        {
+            var index = _proxies.FindIndex(p => 
+                p.Host == failedProxy.Host && p.Port == failedProxy.Port);
+            
+            if (index >= 0)
+            {
+                _proxies[index] = newProxy;
+                Console.WriteLine($"已刷新代理: {newProxy.Host}:{newProxy.Port}");
+                return true;
+            }
+        }
+        
+        return false;
+    }
+}
+
+// 使用示例
+public class CommercialProxyRotationExample
+{
+    private CommercialProxyRotator _rotator;
+    private ChromiumWebBrowser _browser;
+    private IRequestContext _requestContext;
+    
+    public async Task InitializeAsync()
+    {
+        // 1. 创建轮换器
+        _rotator = new CommercialProxyRotator("https://api.siyetian.com/get?type=http&num=1");
+        
+        // 2. 加载代理
+        bool loaded = await _rotator.LoadProxiesAsync(5);
+        
+        if (!loaded)
+        {
+            Console.WriteLine("无法加载代理");
+            return;
+        }
+        
+        // 3. 使用第一个代理
+        await RotateProxyAsync();
+        
+        // 4. 监听加载错误，自动切换代理
+        _browser.LoadError += OnLoadError;
+    }
+    
+    private async Task RotateProxyAsync()
+    {
+        var proxy = _rotator.GetNextProxy();
+        
+        if (proxy == null)
+        {
+            Console.WriteLine("没有可用的代理");
+            return;
+        }
+        
+        // 创建新的请求上下文（如果不存在）
+        if (_requestContext == null)
+        {
+            _requestContext = new RequestContext();
+        }
+        
+        // 设置代理
+        var result = await _requestContext.SetProxyAsync(proxy.Scheme, proxy.Host, proxy.Port);
+        
+        if (result.Success)
+        {
+            Console.WriteLine($"已切换到代理: {proxy.Host}:{proxy.Port}");
+            
+            // 创建或更新浏览器
+            if (_browser == null)
+            {
+                _browser = new ChromiumWebBrowser("https://www.baidu.com")
+                {
+                    RequestContext = _requestContext
+                };
+            }
+            else
+            {
+                _browser.Reload();
+            }
+        }
+    }
+    
+    private async void OnLoadError(object sender, LoadErrorEventArgs e)
+    {
+        if (e.ErrorCode != CefErrorCode.Aborted)
+        {
+            Console.WriteLine($"加载错误 ({e.ErrorCode})，尝试切换代理...");
+            await RotateProxyAsync();
+        }
+    }
+}
+```
+
+#### 4. 完整的 WinForms 示例
+
+以下是一个完整的 Windows Forms 应用程序示例，展示如何使用思叶天等商业代理服务：
+
+```csharp
+using System;
+using System.Windows.Forms;
+using System.Threading.Tasks;
+using CefSharp;
+using CefSharp.WinForms;
+
+public class CommercialProxyBrowserForm : Form
+{
+    private ChromiumWebBrowser _browser;
+    private IRequestContext _requestContext;
+    private CommercialProxyRotator _proxyRotator;
+    
+    private TextBox _apiUrlTextBox;
+    private TextBox _proxyTextBox;
+    private Button _loadProxiesButton;
+    private Button _rotateButton;
+    private Button _goButton;
+    private TextBox _urlTextBox;
+    private Label _statusLabel;
+    
+    public CommercialProxyBrowserForm()
+    {
+        InitializeUI();
+        InitializeCefSharp();
+    }
+    
+    private void InitializeUI()
+    {
+        this.Width = 1200;
+        this.Height = 800;
+        this.Text = "CefSharp - 商业代理服务示例（思叶天等）";
+        
+        var toolPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 120
+        };
+        
+        // API URL 输入
+        var apiLabel = new Label
+        {
+            Text = "代理API地址:",
+            Location = new System.Drawing.Point(10, 10),
+            Width = 100
+        };
+        
+        _apiUrlTextBox = new TextBox
+        {
+            Location = new System.Drawing.Point(120, 8),
+            Width = 600,
+            Text = "https://api.siyetian.com/get?type=http&num=1"
+        };
+        
+        _loadProxiesButton = new Button
+        {
+            Text = "加载代理",
+            Location = new System.Drawing.Point(730, 6),
+            Width = 80
+        };
+        _loadProxiesButton.Click += async (s, e) => await LoadProxiesAsync();
+        
+        // 当前代理显示
+        var proxyLabel = new Label
+        {
+            Text = "当前代理:",
+            Location = new System.Drawing.Point(10, 40),
+            Width = 100
+        };
+        
+        _proxyTextBox = new TextBox
+        {
+            Location = new System.Drawing.Point(120, 38),
+            Width = 500,
+            ReadOnly = true
+        };
+        
+        _rotateButton = new Button
+        {
+            Text = "切换代理",
+            Location = new System.Drawing.Point(630, 36),
+            Width = 80
+        };
+        _rotateButton.Click += async (s, e) => await RotateProxyAsync();
+        
+        // URL 输入
+        var urlLabel = new Label
+        {
+            Text = "访问地址:",
+            Location = new System.Drawing.Point(10, 70),
+            Width = 100
+        };
+        
+        _urlTextBox = new TextBox
+        {
+            Location = new System.Drawing.Point(120, 68),
+            Width = 500,
+            Text = "https://www.baidu.com"
+        };
+        
+        _goButton = new Button
+        {
+            Text = "访问",
+            Location = new System.Drawing.Point(630, 66),
+            Width = 80
+        };
+        _goButton.Click += (s, e) => _browser?.Load(_urlTextBox.Text);
+        
+        // 状态标签
+        _statusLabel = new Label
+        {
+            Location = new System.Drawing.Point(120, 95),
+            Width = 800,
+            Text = "请先加载代理..."
+        };
+        
+        toolPanel.Controls.AddRange(new Control[] {
+            apiLabel, _apiUrlTextBox, _loadProxiesButton,
+            proxyLabel, _proxyTextBox, _rotateButton,
+            urlLabel, _urlTextBox, _goButton,
+            _statusLabel
+        });
+        
+        this.Controls.Add(toolPanel);
+    }
+    
+    private void InitializeCefSharp()
+    {
+        _requestContext = new RequestContext();
+        
+        _browser = new ChromiumWebBrowser("")
+        {
+            Dock = DockStyle.Fill,
+            RequestContext = _requestContext
+        };
+        
+        _browser.LoadingStateChanged += OnLoadingStateChanged;
+        _browser.LoadError += OnLoadError;
+        
+        this.Controls.Add(_browser);
+    }
+    
+    private async Task LoadProxiesAsync()
+    {
+        try
+        {
+            _loadProxiesButton.Enabled = false;
+            _statusLabel.Text = "正在加载代理...";
+            
+            _proxyRotator = new CommercialProxyRotator(_apiUrlTextBox.Text);
+            bool success = await _proxyRotator.LoadProxiesAsync(3);
+            
+            if (success)
+            {
+                _statusLabel.Text = "代理加载成功，点击'切换代理'使用";
+                await RotateProxyAsync();
+            }
+            else
+            {
+                _statusLabel.Text = "代理加载失败";
+                MessageBox.Show("无法加载代理，请检查API地址", "错误");
+            }
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = $"加载失败: {ex.Message}";
+            MessageBox.Show($"加载代理失败: {ex.Message}", "错误");
+        }
+        finally
+        {
+            _loadProxiesButton.Enabled = true;
+        }
+    }
+    
+    private async Task RotateProxyAsync()
+    {
+        if (_proxyRotator == null)
+        {
+            MessageBox.Show("请先加载代理", "提示");
+            return;
+        }
+        
+        try
+        {
+            var proxy = _proxyRotator.GetNextProxy();
+            if (proxy == null)
+            {
+                MessageBox.Show("没有可用的代理", "错误");
+                return;
+            }
+            
+            var result = await _requestContext.SetProxyAsync(
+                proxy.Scheme, 
+                proxy.Host, 
+                proxy.Port
+            );
+            
+            if (result.Success)
+            {
+                _proxyTextBox.Text = $"{proxy.Host}:{proxy.Port}";
+                _statusLabel.Text = $"已切换到代理: {proxy.Host}:{proxy.Port}";
+                
+                if (!string.IsNullOrEmpty(_browser.Address))
+                {
+                    _browser.Reload();
+                }
+            }
+            else
+            {
+                _statusLabel.Text = $"代理设置失败: {result.ErrorMessage}";
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"切换代理失败: {ex.Message}", "错误");
+        }
+    }
+    
+    private void OnLoadingStateChanged(object sender, LoadingStateChangedEventArgs e)
+    {
+        if (!e.IsLoading)
+        {
+            this.Invoke(new Action(() =>
+            {
+                _statusLabel.Text = "页面加载完成";
+            }));
+        }
+    }
+    
+    private void OnLoadError(object sender, LoadErrorEventArgs e)
+    {
+        if (e.ErrorCode != CefErrorCode.Aborted && e.Frame.IsMain)
+        {
+            this.Invoke(new Action(async () =>
+            {
+                _statusLabel.Text = $"加载错误 ({e.ErrorCode})，尝试切换代理...";
+                await Task.Delay(1000);
+                await RotateProxyAsync();
+            }));
+        }
+    }
+    
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _browser?.Dispose();
+        _requestContext?.Dispose();
+        base.OnFormClosing(e);
+    }
+}
+```
+
+#### 5. 思叶天代理配置要点
+
+**获取 API 地址：**
+1. 登录思叶天网站 (https://www.siyetian.com/)
+2. 进入用户中心
+3. 获取您的 API 提取链接
+4. API 链接格式通常为: `http://api.siyetian.com/get?type=http&num=1&key=YOUR_KEY`
+
+**常见参数说明：**
+- `type`: 代理类型 (http, https, socks5)
+- `num`: 提取数量
+- `key`: 您的密钥
+- `time`: 代理有效时长（可选）
+- `format`: 返回格式（json, txt等）
+
+**注意事项：**
+1. **IP白名单**: 某些代理服务需要您在后台添加服务器IP到白名单
+2. **并发限制**: 注意API调用频率限制，避免过快请求
+3. **代理有效期**: 商业代理通常有时效性，需要定期刷新
+4. **失败重试**: 代理可能失效，建议实现自动切换机制
+5. **流量计费**: 注意代理流量使用情况，避免超出套餐
+
+**示例代码使用说明：**
+```csharp
+// 方式1: 直接使用固定代理
+var result = await requestContext.SetProxyAsync("http", "123.45.67.89", 8080);
+
+// 方式2: 从API获取代理
+var client = new SiyetianProxyClient("YOUR_API_URL");
+var proxy = await client.GetProxyAsync();
+await requestContext.SetProxyAsync(proxy.Scheme, proxy.Host, proxy.Port);
+
+// 方式3: 使用代理轮换器
+var rotator = new CommercialProxyRotator("YOUR_API_URL");
+await rotator.LoadProxiesAsync(5);
+var proxy = rotator.GetNextProxy();
 ```
 
 ### IP 代理池集成
