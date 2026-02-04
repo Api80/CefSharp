@@ -1248,8 +1248,12 @@ public class ProxyAuthHelper
         
         // 解析认证信息
         var authParts = authPart.Split(':');
-        if (authParts.Length != 2)
+        if (authParts.Length < 2)
             throw new ArgumentException("认证格式错误，应为 username:password", nameof(proxyString));
+        
+        // 处理密码中包含冒号的情况
+        var username = authParts[0];
+        var password = string.Join(":", authParts, 1, authParts.Length - 1);
         
         // 解析服务器地址
         var serverParts = serverPart.Split(':');

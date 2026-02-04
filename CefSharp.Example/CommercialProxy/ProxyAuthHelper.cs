@@ -67,6 +67,10 @@ namespace CefSharp.Example.CommercialProxy
             // Handle passwords that contain colons by joining remaining parts
             var username = authParts[0];
             var password = string.Join(":", authParts, 1, authParts.Length - 1);
+            
+            // Validate username is not empty
+            if (string.IsNullOrWhiteSpace(username))
+                throw new ArgumentException("Username cannot be empty", nameof(proxyString));
 
             // Parse server address
             var serverParts = serverPart.Split(':');
