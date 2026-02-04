@@ -9,9 +9,40 @@ Commercial proxy services provide rotating IP addresses through APIs. This imple
 - Fetching proxies from API endpoints
 - Parsing both JSON and plain text responses
 - **Authenticated proxies in `user:pass@host:port` format**
+- **Multiple proxy protocols: HTTP, SOCKS4, SOCKS5**
 - Automatic proxy rotation
 - Expired proxy detection
 - Thread-safe proxy management
+
+## Supported Proxy Protocols
+
+CefSharp supports the following proxy protocols:
+
+- **HTTP/HTTPS** - Standard web proxy (most common)
+- **SOCKS4** - SOCKS version 4 proxy
+- **SOCKS5** - SOCKS version 5 proxy (recommended for general use)
+- **SOCKS** - Alias for SOCKS5
+
+### When to Use SOCKS5
+
+SOCKS5 is recommended when:
+- You need to proxy all TCP/UDP traffic (not just HTTP)
+- Using tools like Shadowsocks, V2Ray, or SSH tunnels
+- Connecting through Tor network
+- Your proxy provider only offers SOCKS5
+
+### SOCKS5 Example
+
+```csharp
+// Configure SOCKS5 proxy
+var requestContext = new RequestContext();
+await requestContext.SetProxyAsync("socks5", "127.0.0.1", 1080);
+
+var browser = new ChromiumWebBrowser("https://www.google.com")
+{
+    RequestContext = requestContext
+};
+```
 
 ## Important: Authenticated Proxy Configuration
 

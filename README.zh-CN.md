@@ -25,6 +25,7 @@
   - [右键菜单](#右键菜单)
   - [Cookie 管理](#cookie-管理)
   - [代理设置](#代理设置)
+  - [SOCKS5 代理支持](#socks5-代理支持)
   - [商业代理服务配置](#商业代理服务配置)
   - [IP 代理池集成](#ip-代理池集成)
   - [截图功能](#截图功能)
@@ -1059,6 +1060,531 @@ public class CookieVisitor : ICookieVisitor
     }
 }
 ```
+
+### SOCKS5 代理支持
+
+**答案：是的！CefSharp 完全支持 SOCKS5 代理。**
+
+CefSharp 支持以下代理协议：
+- **HTTP** - 标准 HTTP 代理
+- **SOCKS** - SOCKS 代理（等同于 SOCKS5）
+- **SOCKS4** - SOCKS4 代理
+- **SOCKS5** - SOCKS5 代理（推荐）
+
+#### SOCKS5 基本配置
+
+**方法一：全局 SOCKS5 配置（启动时设置）**
+
+```csharp
+using CefSharp;
+using CefSharp.WinForms;
+
+// 在 Cef.Initialize 之前设置 SOCKS5 代理
+var settings = new CefSettings();
+
+// 使用 SOCKS5 代理
+settings.CefCommandLineArgs.Add("proxy-server", "socks5://127.0.0.1:1080");
+
+// 或者使用 socks（等同于 socks5）
+// settings.CefCommandLineArgs.Add("proxy-server", "socks://127.0.0.1:1080");
+
+Cef.Initialize(settings);
+
+var browser = new ChromiumWebBrowser("https://www.google.com");
+// 添加到窗体...
+```
+
+**方法二：运行时动态设置 SOCKS5 代理**
+
+```csharp
+using CefSharp;
+using CefSharp.WinForms;
+
+public async Task ConfigureSocks5ProxyAsync()
+{
+    // 创建请求上下文
+    var requestContext = new RequestContext();
+    
+    // 设置 SOCKS5 代理
+    var result = await requestContext.SetProxyAsync(
+        "socks5",           // 协议类型
+        "127.0.0.1",        // 代理服务器地址
+        1080                // 代理服务器端口
+    );
+    
+    if (result.Success)
+    {
+        Console.WriteLine("SOCKS5 代理设置成功");
+        
+        // 创建浏览器并使用该代理
+        var browser = new ChromiumWebBrowser("https://www.google.com")
+        {
+            RequestContext = requestContext
+        };
+        
+        // 添加到窗体...
+    }
+    else
+    {
+        Console.WriteLine($"代理设置失败: {result.ErrorMessage}");
+    }
+}
+```
+
+**方法三：使用 ProxyOptions 设置 SOCKS5**
+
+```csharp
+// 使用 ProxyOptions 对象配置
+var requestContextSettings = new RequestContextSettings();
+using (var requestContext = new RequestContext(requestContextSettings))
+{
+    // 设置 SOCKS5 代理
+    var proxyOptions = new ProxyOptions
+    {
+        Scheme = "socks5",              // 使用 SOCKS5
+        Host = "127.0.0.1",             // 代理服务器地址
+        Port = 1080                      // 代理端口
+    };
+    
+    var success = await requestContext.SetProxyAsync(null, proxyOptions);
+    
+    if (success.Success)
+    {
+        // 使用此请求上下文创建浏览器
+        var browser = new ChromiumWebBrowser("https://www.google.com");
+        browser.RequestContext = requestContext;
+    }
+}
+```
+
+#### SOCKS5 与 HTTP 代理的区别
+
+| 特性 | HTTP 代理 | SOCKS5 代理 |
+|------|----------|------------|
+| **协议层级** | 应用层 | 会话层 |
+| **支持协议** | 仅 HTTP/HTTPS | 所有 TCP/UDP 协议 |
+| **性能** | 较快 | 中等 |
+| **匿名性** | 一般 | 较好 |
+| **用途** | Web 浏览 | 通用代理、游戏、P2P |
+| **配置复杂度** | 简单 | 简单 |
+
+#### SOCKS5 带认证的配置
+
+许多 SOCKS5 代理服务器需要用户名和密码认证。配置方法与 HTTP 代理认证相同：
+
+```csharp
+using CefSharp;
+using CefSharp.Handler;
+using CefSharp.WinForms;
+
+/// <summary>
+/// SOCKS5 代理认证处理器
+/// </summary>
+public class Socks5AuthRequestHandler : RequestHandler
+{
+    private readonly string _username;
+    private readonly string _password;
+    
+    public Socks5AuthRequestHandler(string username, string password)
+    {
+        _username = username;
+        _password = password;
+    }
+    
+    protected override bool GetAuthCredentials(
+        IWebBrowser chromiumWebBrowser, 
+        IBrowser browser, 
+        string originUrl, 
+        bool isProxy, 
+        string host, 
+        int port, 
+        string realm, 
+        string scheme, 
+        IAuthCallback callback)
+    {
+        // 检查是否为代理认证请求
+        if (isProxy)
+        {
+            // 提供 SOCKS5 代理的用户名和密码
+            callback.Continue(_username, _password);
+            return true;
+        }
+        
+        return false;
+    }
+}
+
+// 使用示例
+public async Task ConfigureSocks5WithAuthAsync()
+{
+    var requestContext = new RequestContext();
+    
+    // 设置 SOCKS5 代理服务器地址
+    await requestContext.SetProxyAsync("socks5", "proxy.example.com", 1080);
+    
+    // 创建浏览器并设置认证处理器
+    var browser = new ChromiumWebBrowser("https://www.google.com")
+    {
+        RequestContext = requestContext,
+        RequestHandler = new Socks5AuthRequestHandler("your_username", "your_password")
+    };
+}
+```
+
+#### SOCKS5 完整示例
+
+以下是一个完整的 WinForms 应用程序示例，展示如何使用 SOCKS5 代理：
+
+```csharp
+using System;
+using System.Windows.Forms;
+using System.Threading.Tasks;
+using CefSharp;
+using CefSharp.WinForms;
+
+public class Socks5ProxyBrowserForm : Form
+{
+    private ChromiumWebBrowser _browser;
+    private IRequestContext _requestContext;
+    private TextBox _proxyHostTextBox;
+    private TextBox _proxyPortTextBox;
+    private ComboBox _proxyTypeComboBox;
+    private Button _setProxyButton;
+    private Button _clearProxyButton;
+    private Label _statusLabel;
+    
+    public Socks5ProxyBrowserForm()
+    {
+        InitializeUI();
+        InitializeBrowser();
+    }
+    
+    private void InitializeUI()
+    {
+        this.Width = 1200;
+        this.Height = 800;
+        this.Text = "CefSharp - SOCKS5 代理示例";
+        
+        var toolPanel = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 80
+        };
+        
+        // 代理类型选择
+        var typeLabel = new Label
+        {
+            Text = "代理类型:",
+            Location = new System.Drawing.Point(10, 15),
+            Width = 70
+        };
+        
+        _proxyTypeComboBox = new ComboBox
+        {
+            Location = new System.Drawing.Point(85, 12),
+            Width = 100,
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _proxyTypeComboBox.Items.AddRange(new object[] { "http", "socks4", "socks5" });
+        _proxyTypeComboBox.SelectedIndex = 2; // 默认选择 socks5
+        
+        // 代理地址输入
+        var hostLabel = new Label
+        {
+            Text = "代理地址:",
+            Location = new System.Drawing.Point(195, 15),
+            Width = 70
+        };
+        
+        _proxyHostTextBox = new TextBox
+        {
+            Location = new System.Drawing.Point(270, 12),
+            Width = 200,
+            Text = "127.0.0.1"
+        };
+        
+        // 端口输入
+        var portLabel = new Label
+        {
+            Text = "端口:",
+            Location = new System.Drawing.Point(480, 15),
+            Width = 40
+        };
+        
+        _proxyPortTextBox = new TextBox
+        {
+            Location = new System.Drawing.Point(525, 12),
+            Width = 80,
+            Text = "1080"
+        };
+        
+        // 设置按钮
+        _setProxyButton = new Button
+        {
+            Text = "设置代理",
+            Location = new System.Drawing.Point(615, 10),
+            Width = 80
+        };
+        _setProxyButton.Click += async (s, e) => await SetProxyAsync();
+        
+        // 清除按钮
+        _clearProxyButton = new Button
+        {
+            Text = "清除代理",
+            Location = new System.Drawing.Point(705, 10),
+            Width = 80
+        };
+        _clearProxyButton.Click += async (s, e) => await ClearProxyAsync();
+        
+        // 状态标签
+        _statusLabel = new Label
+        {
+            Location = new System.Drawing.Point(10, 50),
+            Width = 800,
+            Text = "请设置 SOCKS5 代理..."
+        };
+        
+        toolPanel.Controls.AddRange(new Control[] {
+            typeLabel, _proxyTypeComboBox,
+            hostLabel, _proxyHostTextBox,
+            portLabel, _proxyPortTextBox,
+            _setProxyButton, _clearProxyButton,
+            _statusLabel
+        });
+        
+        this.Controls.Add(toolPanel);
+    }
+    
+    private void InitializeBrowser()
+    {
+        _requestContext = new RequestContext();
+        
+        _browser = new ChromiumWebBrowser("https://www.whatismyip.com")
+        {
+            Dock = DockStyle.Fill,
+            RequestContext = _requestContext
+        };
+        
+        _browser.LoadingStateChanged += OnLoadingStateChanged;
+        
+        this.Controls.Add(_browser);
+    }
+    
+    private async Task SetProxyAsync()
+    {
+        try
+        {
+            _setProxyButton.Enabled = false;
+            _statusLabel.Text = "正在设置代理...";
+            
+            var proxyType = _proxyTypeComboBox.SelectedItem.ToString();
+            var proxyHost = _proxyHostTextBox.Text.Trim();
+            var proxyPort = int.Parse(_proxyPortTextBox.Text.Trim());
+            
+            var result = await _requestContext.SetProxyAsync(
+                proxyType,
+                proxyHost,
+                proxyPort
+            );
+            
+            if (result.Success)
+            {
+                _statusLabel.Text = $"代理设置成功: {proxyType}://{proxyHost}:{proxyPort}";
+                
+                // 重新加载页面以使用新代理
+                _browser.Reload();
+            }
+            else
+            {
+                _statusLabel.Text = $"代理设置失败: {result.ErrorMessage}";
+                MessageBox.Show($"代理设置失败: {result.ErrorMessage}", "错误");
+            }
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = $"错误: {ex.Message}";
+            MessageBox.Show($"设置代理失败: {ex.Message}", "错误");
+        }
+        finally
+        {
+            _setProxyButton.Enabled = true;
+        }
+    }
+    
+    private async Task ClearProxyAsync()
+    {
+        try
+        {
+            _clearProxyButton.Enabled = false;
+            _statusLabel.Text = "正在清除代理...";
+            
+            var result = await _requestContext.SetProxyAsync(null, null);
+            
+            if (result.Success)
+            {
+                _statusLabel.Text = "代理已清除，使用直连";
+                _browser.Reload();
+            }
+            else
+            {
+                _statusLabel.Text = $"清除代理失败: {result.ErrorMessage}";
+            }
+        }
+        catch (Exception ex)
+        {
+            _statusLabel.Text = $"错误: {ex.Message}";
+        }
+        finally
+        {
+            _clearProxyButton.Enabled = true;
+        }
+    }
+    
+    private void OnLoadingStateChanged(object sender, LoadingStateChangedEventArgs e)
+    {
+        if (!e.IsLoading)
+        {
+            this.Invoke(new Action(() =>
+            {
+                _statusLabel.Text += $" | 页面加载完成: {_browser.Address}";
+            }));
+        }
+    }
+    
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _browser?.Dispose();
+        _requestContext?.Dispose();
+        base.OnFormClosing(e);
+    }
+}
+
+// 主程序入口
+public class Program
+{
+    [STAThread]
+    static void Main()
+    {
+        var settings = new CefSettings();
+        Cef.Initialize(settings);
+        
+        Application.EnableVisualStyles();
+        Application.Run(new Socks5ProxyBrowserForm());
+        
+        Cef.Shutdown();
+    }
+}
+```
+
+#### SOCKS5 常见使用场景
+
+1. **本地 VPN/代理工具**
+   - Shadowsocks、V2Ray 等工具通常提供本地 SOCKS5 代理
+   - 典型配置：`socks5://127.0.0.1:1080`
+
+2. **SSH 隧道**
+   - 通过 SSH 创建 SOCKS5 代理：`ssh -D 1080 user@server`
+   - 配置：`socks5://127.0.0.1:1080`
+
+3. **Tor 网络**
+   - Tor 浏览器提供 SOCKS5 代理
+   - 默认配置：`socks5://127.0.0.1:9150`
+
+4. **企业代理服务器**
+   - 许多企业使用 SOCKS5 代理服务器
+   - 可能需要认证
+
+#### SOCKS5 配置技巧
+
+**1. 验证 SOCKS5 代理是否工作**
+
+```csharp
+// 访问 IP 查询网站验证代理
+var browser = new ChromiumWebBrowser("https://api.ipify.org?format=json");
+// 或
+// var browser = new ChromiumWebBrowser("https://www.whatismyip.com");
+```
+
+**2. SOCKS5 代理切换**
+
+```csharp
+public class ProxyManager
+{
+    private IRequestContext _requestContext;
+    
+    public async Task SwitchToSocks5Async(string host, int port)
+    {
+        await _requestContext.SetProxyAsync("socks5", host, port);
+    }
+    
+    public async Task SwitchToHttpAsync(string host, int port)
+    {
+        await _requestContext.SetProxyAsync("http", host, port);
+    }
+    
+    public async Task DisableProxyAsync()
+    {
+        await _requestContext.SetProxyAsync(null, null);
+    }
+}
+```
+
+**3. 多代理配置（Proxy PAC）**
+
+```csharp
+// 使用 PAC 文件可以根据 URL 自动选择代理类型
+var settings = new CefSettings();
+settings.CefCommandLineArgs.Add("proxy-pac-url", "file:///path/to/proxy.pac");
+```
+
+**4. 代理异常处理**
+
+```csharp
+try
+{
+    var result = await requestContext.SetProxyAsync("socks5", "proxy.example.com", 1080);
+    
+    if (!result.Success)
+    {
+        // 代理设置失败，可能原因：
+        // 1. 代理服务器不可达
+        // 2. 端口被占用
+        // 3. 防火墙阻止
+        Console.WriteLine($"代理设置失败: {result.ErrorMessage}");
+        
+        // 回退到直连
+        await requestContext.SetProxyAsync(null, null);
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"异常: {ex.Message}");
+}
+```
+
+#### 重要提示
+
+1. **协议选择**：
+   - `socks` 和 `socks5` 是等价的，推荐使用 `socks5` 以明确版本
+   - 如果需要 SOCKS4，明确使用 `socks4`
+
+2. **性能考虑**：
+   - SOCKS5 比 HTTP 代理稍慢，但支持更多协议
+   - 适合需要代理所有流量的场景
+
+3. **安全性**：
+   - SOCKS5 本身不加密流量，仅做转发
+   - 如需加密，使用 SSH 隧道或 VPN
+
+4. **认证**：
+   - SOCKS5 支持用户名/密码认证
+   - 使用 `RequestHandler.GetAuthCredentials` 处理认证
+
+5. **故障排查**：
+   - 确保 SOCKS5 服务器正在运行
+   - 检查防火墙设置
+   - 验证端口号正确
+   - 查看 CefSharp 日志输出
 
 ### 代理设置
 
