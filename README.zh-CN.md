@@ -25,6 +25,7 @@
   - [右键菜单](#右键菜单)
   - [Cookie 管理](#cookie-管理)
   - [代理设置](#代理设置)
+  - [IP 代理池集成](#ip-代理池集成)
   - [截图功能](#截图功能)
   - [打印 PDF](#打印-pdf)
 - [常见问题](#常见问题)
@@ -1087,6 +1088,923 @@ using (var requestContext = new RequestContext(requestContextSettings))
 // 清除代理
 await requestContext.SetProxyAsync(null, null);
 ```
+
+### IP 代理池集成
+
+在实际应用中，您可能需要使用代理池来避免单一代理的限制。以下是完整的 IP 代理池实现方案：
+
+#### 1. 代理池管理器
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+
+/// <summary>
+/// 代理服务器信息
+/// </summary>
+public class ProxyInfo
+{
+    public string Host { get; set; }
+    public int Port { get; set; }
+    public string Scheme { get; set; } = "http"; // http, socks, socks4, socks5
+    public string Username { get; set; }
+    public string Password { get; set; }
+    public int FailureCount { get; set; }
+    public DateTime LastUsed { get; set; }
+    public DateTime LastChecked { get; set; }
+    public bool IsHealthy { get; set; } = true;
+    
+    public string GetProxyUrl()
+    {
+        return $"{Scheme}://{Host}:{Port}";
+    }
+    
+    public override string ToString()
+    {
+        return $"{Scheme}://{Host}:{Port}";
+    }
+}
+
+/// <summary>
+/// 代理池管理器
+/// </summary>
+public class ProxyPool
+{
+    private List<ProxyInfo> _proxies = new List<ProxyInfo>();
+    private int _currentIndex = 0;
+    private readonly object _lock = new object();
+    private readonly Random _random = new Random();
+    private Timer _healthCheckTimer;
+    
+    /// <summary>
+    /// 代理轮换模式
+    /// </summary>
+    public enum RotationMode
+    {
+        Sequential,  // 顺序轮换
+        Random,      // 随机选择
+        LeastUsed,   // 最少使用
+        HealthBased  // 基于健康状态
+    }
+    
+    public RotationMode Mode { get; set; } = RotationMode.Sequential;
+    
+    /// <summary>
+    /// 最大失败次数，超过后代理将被标记为不健康
+    /// </summary>
+    public int MaxFailureCount { get; set; } = 3;
+    
+    /// <summary>
+    /// 是否启用健康检查
+    /// </summary>
+    public bool EnableHealthCheck { get; set; } = true;
+    
+    /// <summary>
+    /// 健康检查间隔（毫秒）
+    /// </summary>
+    public int HealthCheckInterval { get; set; } = 60000; // 1分钟
+    
+    public ProxyPool()
+    {
+        // 启动健康检查定时器
+        _healthCheckTimer = new Timer(async _ => await PerformHealthCheckAsync(), 
+            null, HealthCheckInterval, HealthCheckInterval);
+    }
+    
+    /// <summary>
+    /// 添加代理到池中
+    /// </summary>
+    public void AddProxy(string host, int port, string scheme = "http", 
+        string username = null, string password = null)
+    {
+        lock (_lock)
+        {
+            var proxy = new ProxyInfo
+            {
+                Host = host,
+                Port = port,
+                Scheme = scheme,
+                Username = username,
+                Password = password,
+                LastChecked = DateTime.Now
+            };
+            
+            _proxies.Add(proxy);
+        }
+    }
+    
+    /// <summary>
+    /// 批量添加代理
+    /// </summary>
+    public void AddProxies(IEnumerable<ProxyInfo> proxies)
+    {
+        lock (_lock)
+        {
+            _proxies.AddRange(proxies);
+        }
+    }
+    
+    /// <summary>
+    /// 从文件加载代理列表
+    /// 格式：host:port 或 scheme://host:port 或 scheme://username:password@host:port
+    /// </summary>
+    public void LoadFromFile(string filePath)
+    {
+        var lines = System.IO.File.ReadAllLines(filePath);
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#"))
+                continue;
+                
+            try
+            {
+                var proxy = ParseProxyString(line.Trim());
+                if (proxy != null)
+                {
+                    AddProxies(new[] { proxy });
+                }
+            }
+            catch
+            {
+                // 忽略无效行
+            }
+        }
+    }
+    
+    /// <summary>
+    /// 解析代理字符串
+    /// </summary>
+    private ProxyInfo ParseProxyString(string proxyString)
+    {
+        var proxy = new ProxyInfo();
+        
+        // 处理 scheme://username:password@host:port 格式
+        if (proxyString.Contains("://"))
+        {
+            var parts = proxyString.Split(new[] { "://" }, StringSplitOptions.None);
+            proxy.Scheme = parts[0];
+            proxyString = parts[1];
+        }
+        
+        // 处理认证信息
+        if (proxyString.Contains("@"))
+        {
+            var authParts = proxyString.Split('@');
+            var credentials = authParts[0].Split(':');
+            proxy.Username = credentials[0];
+            proxy.Password = credentials.Length > 1 ? credentials[1] : "";
+            proxyString = authParts[1];
+        }
+        
+        // 处理 host:port
+        var hostPort = proxyString.Split(':');
+        proxy.Host = hostPort[0];
+        proxy.Port = int.Parse(hostPort[1]);
+        
+        return proxy;
+    }
+    
+    /// <summary>
+    /// 获取下一个可用的代理
+    /// </summary>
+    public ProxyInfo GetNextProxy()
+    {
+        lock (_lock)
+        {
+            if (_proxies.Count == 0)
+                return null;
+            
+            // 过滤健康的代理
+            var healthyProxies = _proxies.Where(p => p.IsHealthy).ToList();
+            if (healthyProxies.Count == 0)
+            {
+                // 如果没有健康的代理，重置所有代理的健康状态
+                foreach (var proxy in _proxies)
+                {
+                    proxy.IsHealthy = true;
+                    proxy.FailureCount = 0;
+                }
+                healthyProxies = _proxies.ToList();
+            }
+            
+            ProxyInfo selectedProxy;
+            
+            switch (Mode)
+            {
+                case RotationMode.Random:
+                    selectedProxy = healthyProxies[_random.Next(healthyProxies.Count)];
+                    break;
+                    
+                case RotationMode.LeastUsed:
+                    selectedProxy = healthyProxies.OrderBy(p => p.LastUsed).First();
+                    break;
+                    
+                case RotationMode.HealthBased:
+                    selectedProxy = healthyProxies.OrderBy(p => p.FailureCount).First();
+                    break;
+                    
+                case RotationMode.Sequential:
+                default:
+                    _currentIndex = _currentIndex % healthyProxies.Count;
+                    selectedProxy = healthyProxies[_currentIndex];
+                    _currentIndex++;
+                    break;
+            }
+            
+            selectedProxy.LastUsed = DateTime.Now;
+            return selectedProxy;
+        }
+    }
+    
+    /// <summary>
+    /// 报告代理失败
+    /// </summary>
+    public void ReportFailure(ProxyInfo proxy)
+    {
+        lock (_lock)
+        {
+            var targetProxy = _proxies.FirstOrDefault(p => 
+                p.Host == proxy.Host && p.Port == proxy.Port);
+            
+            if (targetProxy != null)
+            {
+                targetProxy.FailureCount++;
+                
+                if (targetProxy.FailureCount >= MaxFailureCount)
+                {
+                    targetProxy.IsHealthy = false;
+                    Console.WriteLine($"代理 {targetProxy} 已被标记为不健康");
+                }
+            }
+        }
+    }
+    
+    /// <summary>
+    /// 报告代理成功
+    /// </summary>
+    public void ReportSuccess(ProxyInfo proxy)
+    {
+        lock (_lock)
+        {
+            var targetProxy = _proxies.FirstOrDefault(p => 
+                p.Host == proxy.Host && p.Port == proxy.Port);
+            
+            if (targetProxy != null)
+            {
+                targetProxy.FailureCount = 0;
+                targetProxy.IsHealthy = true;
+            }
+        }
+    }
+    
+    /// <summary>
+    /// 执行健康检查
+    /// </summary>
+    private async Task PerformHealthCheckAsync()
+    {
+        if (!EnableHealthCheck)
+            return;
+        
+        var tasks = new List<Task>();
+        
+        lock (_lock)
+        {
+            foreach (var proxy in _proxies.ToList())
+            {
+                tasks.Add(CheckProxyHealthAsync(proxy));
+            }
+        }
+        
+        await Task.WhenAll(tasks);
+    }
+    
+    /// <summary>
+    /// 检查单个代理的健康状态
+    /// </summary>
+    private async Task CheckProxyHealthAsync(ProxyInfo proxy)
+    {
+        try
+        {
+            var handler = new HttpClientHandler
+            {
+                Proxy = new System.Net.WebProxy($"{proxy.Scheme}://{proxy.Host}:{proxy.Port}"),
+                UseProxy = true
+            };
+            
+            using (var client = new HttpClient(handler))
+            {
+                client.Timeout = TimeSpan.FromSeconds(10);
+                var response = await client.GetAsync("http://www.gstatic.com/generate_204");
+                
+                if (response.IsSuccessStatusCode)
+                {
+                    ReportSuccess(proxy);
+                }
+                else
+                {
+                    ReportFailure(proxy);
+                }
+            }
+        }
+        catch
+        {
+            ReportFailure(proxy);
+        }
+        finally
+        {
+            proxy.LastChecked = DateTime.Now;
+        }
+    }
+    
+    /// <summary>
+    /// 获取代理池统计信息
+    /// </summary>
+    public string GetStatistics()
+    {
+        lock (_lock)
+        {
+            var healthy = _proxies.Count(p => p.IsHealthy);
+            var unhealthy = _proxies.Count - healthy;
+            
+            return $"总代理数: {_proxies.Count}, 健康: {healthy}, 不健康: {unhealthy}";
+        }
+    }
+    
+    /// <summary>
+    /// 清除所有代理
+    /// </summary>
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            _proxies.Clear();
+            _currentIndex = 0;
+        }
+    }
+    
+    /// <summary>
+    /// 释放资源
+    /// </summary>
+    public void Dispose()
+    {
+        _healthCheckTimer?.Dispose();
+    }
+}
+```
+
+#### 2. CefSharp 代理池集成
+
+```csharp
+using System;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using CefSharp;
+using CefSharp.WinForms;
+
+/// <summary>
+/// CefSharp 代理池浏览器包装器
+/// </summary>
+public class ProxyPoolBrowser
+{
+    private ChromiumWebBrowser _browser;
+    private ProxyPool _proxyPool;
+    private IRequestContext _requestContext;
+    private ProxyInfo _currentProxy;
+    
+    public ChromiumWebBrowser Browser => _browser;
+    
+    public ProxyPoolBrowser(string initialUrl, ProxyPool proxyPool)
+    {
+        _proxyPool = proxyPool;
+        
+        // 创建独立的请求上下文
+        var requestContextSettings = new RequestContextSettings
+        {
+            CachePath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "CefSharp", "ProxyCache", Guid.NewGuid().ToString()
+            )
+        };
+        
+        _requestContext = new RequestContext(requestContextSettings);
+        
+        // 创建浏览器
+        _browser = new ChromiumWebBrowser(initialUrl)
+        {
+            RequestContext = _requestContext
+        };
+        
+        // 监听导航事件
+        _browser.FrameLoadStart += OnFrameLoadStart;
+        _browser.LoadError += OnLoadError;
+        _browser.LoadingStateChanged += OnLoadingStateChanged;
+        
+        // 设置初始代理
+        RotateProxyAsync().Wait();
+    }
+    
+    /// <summary>
+    /// 轮换到下一个代理
+    /// </summary>
+    public async Task<bool> RotateProxyAsync()
+    {
+        var newProxy = _proxyPool.GetNextProxy();
+        if (newProxy == null)
+        {
+            MessageBox.Show("代理池中没有可用的代理！", "错误");
+            return false;
+        }
+        
+        _currentProxy = newProxy;
+        
+        // 设置代理
+        var result = await _requestContext.SetProxyAsync(
+            newProxy.Scheme, 
+            newProxy.Host, 
+            newProxy.Port
+        );
+        
+        if (result.Success)
+        {
+            Console.WriteLine($"已切换到代理: {newProxy}");
+            return true;
+        }
+        else
+        {
+            Console.WriteLine($"设置代理失败: {result.ErrorMessage}");
+            _proxyPool.ReportFailure(newProxy);
+            return false;
+        }
+    }
+    
+    /// <summary>
+    /// 手动轮换代理并重新加载当前页面
+    /// </summary>
+    public async Task RotateAndReloadAsync()
+    {
+        var success = await RotateProxyAsync();
+        if (success)
+        {
+            _browser.Reload();
+        }
+    }
+    
+    private void OnFrameLoadStart(object sender, FrameLoadStartEventArgs e)
+    {
+        if (e.Frame.IsMain)
+        {
+            Console.WriteLine($"使用代理 {_currentProxy} 开始加载: {e.Url}");
+        }
+    }
+    
+    private void OnLoadError(object sender, LoadErrorEventArgs e)
+    {
+        // 报告代理失败
+        if (_currentProxy != null && e.ErrorCode != CefErrorCode.Aborted)
+        {
+            Console.WriteLine($"代理 {_currentProxy} 加载失败: {e.ErrorCode}");
+            _proxyPool.ReportFailure(_currentProxy);
+            
+            // 自动切换到下一个代理并重试
+            if (e.Frame.IsMain)
+            {
+                Task.Run(async () =>
+                {
+                    await Task.Delay(1000); // 延迟1秒
+                    await RotateAndReloadAsync();
+                });
+            }
+        }
+    }
+    
+    private void OnLoadingStateChanged(object sender, LoadingStateChangedEventArgs e)
+    {
+        if (!e.IsLoading && _browser.CanExecuteJavascriptInMainFrame)
+        {
+            // 页面加载成功，报告代理成功
+            if (_currentProxy != null)
+            {
+                _proxyPool.ReportSuccess(_currentProxy);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// 获取当前使用的代理信息
+    /// </summary>
+    public string GetCurrentProxyInfo()
+    {
+        return _currentProxy?.ToString() ?? "无代理";
+    }
+    
+    /// <summary>
+    /// 释放资源
+    /// </summary>
+    public void Dispose()
+    {
+        _browser?.Dispose();
+        _requestContext?.Dispose();
+    }
+}
+```
+
+#### 3. 使用示例
+
+**示例 1: 基本代理池使用**
+
+```csharp
+using System;
+using System.Windows.Forms;
+using CefSharp;
+using CefSharp.WinForms;
+
+public class ProxyPoolExampleForm : Form
+{
+    private ProxyPool _proxyPool;
+    private ProxyPoolBrowser _proxyBrowser;
+    private Label _statusLabel;
+    private Button _rotateButton;
+    private TextBox _urlTextBox;
+    private Button _goButton;
+    
+    public ProxyPoolExampleForm()
+    {
+        InitializeUI();
+        InitializeProxyPool();
+    }
+    
+    private void InitializeUI()
+    {
+        this.Width = 1200;
+        this.Height = 800;
+        this.Text = "CefSharp 代理池示例";
+        
+        // 工具栏
+        var toolbar = new Panel
+        {
+            Dock = DockStyle.Top,
+            Height = 80
+        };
+        
+        _statusLabel = new Label
+        {
+            Location = new System.Drawing.Point(10, 10),
+            Width = 600,
+            Text = "正在初始化..."
+        };
+        
+        _urlTextBox = new TextBox
+        {
+            Location = new System.Drawing.Point(10, 40),
+            Width = 400
+        };
+        _urlTextBox.Text = "https://api.ipify.org/?format=json"; // IP查询接口
+        
+        _goButton = new Button
+        {
+            Location = new System.Drawing.Point(420, 38),
+            Width = 80,
+            Text = "访问"
+        };
+        _goButton.Click += GoButton_Click;
+        
+        _rotateButton = new Button
+        {
+            Location = new System.Drawing.Point(510, 38),
+            Width = 100,
+            Text = "切换代理"
+        };
+        _rotateButton.Click += RotateButton_Click;
+        
+        var statsButton = new Button
+        {
+            Location = new System.Drawing.Point(620, 38),
+            Width = 100,
+            Text = "代理统计"
+        };
+        statsButton.Click += (s, e) => 
+        {
+            MessageBox.Show(_proxyPool.GetStatistics(), "代理池统计");
+        };
+        
+        toolbar.Controls.AddRange(new Control[] { 
+            _statusLabel, _urlTextBox, _goButton, _rotateButton, statsButton 
+        });
+        
+        this.Controls.Add(toolbar);
+    }
+    
+    private void InitializeProxyPool()
+    {
+        // 初始化代理池
+        _proxyPool = new ProxyPool
+        {
+            Mode = ProxyPool.RotationMode.Sequential,
+            MaxFailureCount = 3,
+            EnableHealthCheck = true
+        };
+        
+        // 添加代理（示例数据）
+        // 在实际使用中，您应该从文件或API加载真实的代理列表
+        _proxyPool.AddProxy("proxy1.example.com", 8080, "http");
+        _proxyPool.AddProxy("proxy2.example.com", 8080, "http");
+        _proxyPool.AddProxy("proxy3.example.com", 1080, "socks5");
+        
+        // 或从文件加载
+        // _proxyPool.LoadFromFile("proxies.txt");
+        
+        // 创建代理浏览器
+        _proxyBrowser = new ProxyPoolBrowser(_urlTextBox.Text, _proxyPool);
+        _proxyBrowser.Browser.Dock = DockStyle.Fill;
+        
+        this.Controls.Add(_proxyBrowser.Browser);
+        
+        UpdateStatus();
+    }
+    
+    private async void RotateButton_Click(object sender, EventArgs e)
+    {
+        _rotateButton.Enabled = false;
+        await _proxyBrowser.RotateAndReloadAsync();
+        UpdateStatus();
+        _rotateButton.Enabled = true;
+    }
+    
+    private void GoButton_Click(object sender, EventArgs e)
+    {
+        _proxyBrowser.Browser.Load(_urlTextBox.Text);
+    }
+    
+    private void UpdateStatus()
+    {
+        _statusLabel.Text = $"当前代理: {_proxyBrowser.GetCurrentProxyInfo()} | {_proxyPool.GetStatistics()}";
+    }
+    
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        _proxyBrowser?.Dispose();
+        _proxyPool?.Dispose();
+        base.OnFormClosing(e);
+    }
+}
+
+// 主程序入口
+public class Program
+{
+    [STAThread]
+    static void Main()
+    {
+        var settings = new CefSettings();
+        Cef.Initialize(settings);
+        
+        Application.EnableVisualStyles();
+        Application.Run(new ProxyPoolExampleForm());
+        
+        Cef.Shutdown();
+    }
+}
+```
+
+**示例 2: 带认证的代理池**
+
+```csharp
+public class AuthProxyPoolExample
+{
+    public void SetupAuthenticatedProxyPool()
+    {
+        var proxyPool = new ProxyPool
+        {
+            Mode = ProxyPool.RotationMode.Random
+        };
+        
+        // 添加需要认证的代理
+        proxyPool.AddProxy(
+            host: "premium-proxy1.com",
+            port: 8080,
+            scheme: "http",
+            username: "myuser",
+            password: "mypassword"
+        );
+        
+        proxyPool.AddProxy(
+            host: "premium-proxy2.com",
+            port: 8080,
+            scheme: "http",
+            username: "myuser",
+            password: "mypassword"
+        );
+        
+        // 使用自定义请求处理器处理认证
+        var browser = new ChromiumWebBrowser("https://www.example.com");
+        browser.RequestHandler = new AuthProxyRequestHandler(proxyPool);
+    }
+}
+
+/// <summary>
+/// 处理代理认证的请求处理器
+/// </summary>
+public class AuthProxyRequestHandler : RequestHandler
+{
+    private ProxyPool _proxyPool;
+    private ProxyInfo _currentProxy;
+    
+    public AuthProxyRequestHandler(ProxyPool proxyPool)
+    {
+        _proxyPool = proxyPool;
+        _currentProxy = proxyPool.GetNextProxy();
+    }
+    
+    protected override bool GetAuthCredentials(
+        IWebBrowser chromiumWebBrowser, 
+        IBrowser browser, 
+        string originUrl, 
+        bool isProxy, 
+        string host, 
+        int port, 
+        string realm, 
+        string scheme, 
+        IAuthCallback callback)
+    {
+        if (isProxy && _currentProxy != null)
+        {
+            if (!string.IsNullOrEmpty(_currentProxy.Username))
+            {
+                callback.Continue(_currentProxy.Username, _currentProxy.Password);
+                return true;
+            }
+        }
+        
+        return false;
+    }
+}
+```
+
+**示例 3: 从文件加载代理列表**
+
+创建代理列表文件 `proxies.txt`:
+```
+# HTTP 代理
+http://proxy1.example.com:8080
+http://proxy2.example.com:8080
+
+# SOCKS5 代理
+socks5://proxy3.example.com:1080
+
+# 带认证的代理
+http://username:password@proxy4.example.com:8080
+socks5://user:pass@proxy5.example.com:1080
+
+# 这是注释，会被忽略
+```
+
+使用代码：
+```csharp
+var proxyPool = new ProxyPool
+{
+    Mode = ProxyPool.RotationMode.HealthBased
+};
+
+// 从文件加载
+proxyPool.LoadFromFile("proxies.txt");
+
+Console.WriteLine(proxyPool.GetStatistics());
+```
+
+**示例 4: 高级代理池配置**
+
+```csharp
+public class AdvancedProxyPoolSetup
+{
+    public static ProxyPool CreateAdvancedProxyPool()
+    {
+        var proxyPool = new ProxyPool
+        {
+            // 使用健康状态优先的轮换模式
+            Mode = ProxyPool.RotationMode.HealthBased,
+            
+            // 失败3次后标记为不健康
+            MaxFailureCount = 3,
+            
+            // 启用自动健康检查
+            EnableHealthCheck = true,
+            
+            // 每30秒检查一次
+            HealthCheckInterval = 30000
+        };
+        
+        // 从多个来源加载代理
+        LoadProxiesFromApi(proxyPool);
+        LoadProxiesFromFile(proxyPool);
+        
+        return proxyPool;
+    }
+    
+    private static void LoadProxiesFromApi(ProxyPool pool)
+    {
+        // 从代理API服务获取代理列表
+        // 这里是示例，实际应该调用您的代理API
+        var apiProxies = new[]
+        {
+            new ProxyInfo { Host = "api-proxy1.com", Port = 8080, Scheme = "http" },
+            new ProxyInfo { Host = "api-proxy2.com", Port = 8080, Scheme = "http" }
+        };
+        
+        pool.AddProxies(apiProxies);
+    }
+    
+    private static void LoadProxiesFromFile(ProxyPool pool)
+    {
+        if (System.IO.File.Exists("proxies.txt"))
+        {
+            pool.LoadFromFile("proxies.txt");
+        }
+    }
+}
+```
+
+#### 4. 最佳实践
+
+**性能优化：**
+
+1. **使用独立的请求上下文**：每个代理浏览器使用独立的缓存路径，避免缓存冲突
+2. **异步操作**：所有代理切换操作都使用异步方法，避免阻塞UI
+3. **健康检查**：定期检查代理健康状态，自动剔除失效代理
+
+**错误处理：**
+
+```csharp
+public async Task<bool> SafeLoadWithProxy(string url, int maxRetries = 3)
+{
+    for (int i = 0; i < maxRetries; i++)
+    {
+        try
+        {
+            await _proxyBrowser.RotateProxyAsync();
+            _proxyBrowser.Browser.Load(url);
+            
+            // 等待加载完成
+            await Task.Delay(5000);
+            
+            if (_proxyBrowser.Browser.IsLoading == false)
+            {
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"重试 {i + 1}/{maxRetries}: {ex.Message}");
+            
+            if (_currentProxy != null)
+            {
+                _proxyPool.ReportFailure(_currentProxy);
+            }
+        }
+    }
+    
+    return false;
+}
+```
+
+**监控和日志：**
+
+```csharp
+public class ProxyPoolMonitor
+{
+    private ProxyPool _pool;
+    
+    public ProxyPoolMonitor(ProxyPool pool)
+    {
+        _pool = pool;
+        
+        // 定期记录统计信息
+        var timer = new Timer(_ => LogStatistics(), null, 0, 60000);
+    }
+    
+    private void LogStatistics()
+    {
+        var stats = _pool.GetStatistics();
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {stats}");
+        
+        // 可以将统计信息写入日志文件或发送到监控系统
+        System.IO.File.AppendAllText(
+            "proxy_pool_stats.log",
+            $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {stats}\n"
+        );
+    }
+}
+```
+
+#### 5. 注意事项
+
+1. **代理来源合法性**：确保使用的代理服务是合法获得的
+2. **遵守目标网站规则**：使用代理池时仍需遵守目标网站的 robots.txt 和服务条款
+3. **速率限制**：即使使用代理池，也应该实施适当的请求速率限制
+4. **数据隐私**：使用第三方代理时，注意敏感数据可能被代理服务器记录
+5. **成本考虑**：高质量的代理服务通常需要付费，评估成本效益比
 
 ### 截图功能
 
