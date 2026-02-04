@@ -94,7 +94,14 @@ namespace CefSharp.Example.ProxyPool
         /// </summary>
         public override int GetHashCode()
         {
-            return (Host + Port + Scheme).GetHashCode();
+            unchecked
+            {
+                int hash = 17;
+                hash = hash * 31 + (Host?.GetHashCode() ?? 0);
+                hash = hash * 31 + Port.GetHashCode();
+                hash = hash * 31 + (Scheme?.GetHashCode() ?? 0);
+                return hash;
+            }
         }
     }
 
@@ -161,7 +168,17 @@ namespace CefSharp.Example.ProxyPool
         {
             // Start health check timer
             _healthCheckTimer = new Timer(
-                async _ => await PerformHealthCheckAsync(),
+                async _ =>
+                {
+                    try
+                    {
+                        await PerformHealthCheckAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Health check error: {ex.Message}");
+                    }
+                },
                 null,
                 HealthCheckInterval,
                 HealthCheckInterval
@@ -314,11 +331,27 @@ namespace CefSharp.Example.ProxyPool
                         break;
 
                     case RotationMode.LeastUsed:
-                        selectedProxy = healthyProxies.OrderBy(p => p.LastUsed).First();
+                        // Find proxy with earliest LastUsed time
+                        selectedProxy = healthyProxies[0];
+                        for (int i = 1; i < healthyProxies.Count; i++)
+                        {
+                            if (healthyProxies[i].LastUsed < selectedProxy.LastUsed)
+                            {
+                                selectedProxy = healthyProxies[i];
+                            }
+                        }
                         break;
 
                     case RotationMode.HealthBased:
-                        selectedProxy = healthyProxies.OrderBy(p => p.FailureCount).First();
+                        // Find proxy with lowest failure count
+                        selectedProxy = healthyProxies[0];
+                        for (int i = 1; i < healthyProxies.Count; i++)
+                        {
+                            if (healthyProxies[i].FailureCount < selectedProxy.FailureCount)
+                            {
+                                selectedProxy = healthyProxies[i];
+                            }
+                        }
                         break;
 
                     case RotationMode.Sequential:

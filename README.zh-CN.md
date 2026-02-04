@@ -1423,35 +1423,34 @@ public class ProxyPool
     /// <summary>
     /// 获取代理池统计信息
     /// </summary>
-    public string GetStatistics()
+    public ProxyPoolStatistics GetStatistics()
     {
         lock (_lock)
         {
-            var healthy = _proxies.Count(p => p.IsHealthy);
-            var unhealthy = _proxies.Count - healthy;
-            
-            return $"总代理数: {_proxies.Count}, 健康: {healthy}, 不健康: {unhealthy}";
+            return new ProxyPoolStatistics
+            {
+                TotalProxies = _proxies.Count,
+                HealthyProxies = _proxies.Count(p => p.IsHealthy),
+                UnhealthyProxies = _proxies.Count - _proxies.Count(p => p.IsHealthy),
+                AverageFailureCount = _proxies.Any() ? _proxies.Average(p => p.FailureCount) : 0
+            };
         }
     }
+}
+
+/// <summary>
+/// 代理池统计信息
+/// </summary>
+public class ProxyPoolStatistics
+{
+    public int TotalProxies { get; set; }
+    public int HealthyProxies { get; set; }
+    public int UnhealthyProxies { get; set; }
+    public double AverageFailureCount { get; set; }
     
-    /// <summary>
-    /// 清除所有代理
-    /// </summary>
-    public void Clear()
+    public override string ToString()
     {
-        lock (_lock)
-        {
-            _proxies.Clear();
-            _currentIndex = 0;
-        }
-    }
-    
-    /// <summary>
-    /// 释放资源
-    /// </summary>
-    public void Dispose()
-    {
-        _healthCheckTimer?.Dispose();
+        return $"总代理数: {TotalProxies}, 健康: {HealthyProxies}, 不健康: {UnhealthyProxies}, 平均失败次数: {AverageFailureCount:F2}";
     }
 }
 ```
@@ -1937,35 +1936,44 @@ public class AdvancedProxyPoolSetup
 **错误处理：**
 
 ```csharp
-public async Task<bool> SafeLoadWithProxy(string url, int maxRetries = 3)
+public class ProxyPoolBrowser
 {
-    for (int i = 0; i < maxRetries; i++)
-    {
-        try
-        {
-            await _proxyBrowser.RotateProxyAsync();
-            _proxyBrowser.Browser.Load(url);
-            
-            // 等待加载完成
-            await Task.Delay(5000);
-            
-            if (_proxyBrowser.Browser.IsLoading == false)
-            {
-                return true;
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"重试 {i + 1}/{maxRetries}: {ex.Message}");
-            
-            if (_currentProxy != null)
-            {
-                _proxyPool.ReportFailure(_currentProxy);
-            }
-        }
-    }
+    private ChromiumWebBrowser _browser;
+    private ProxyPool _proxyPool;
+    private ProxyInfo _currentProxy;
     
-    return false;
+    // ... 其他成员 ...
+    
+    public async Task<bool> SafeLoadWithProxy(string url, int maxRetries = 3)
+    {
+        for (int i = 0; i < maxRetries; i++)
+        {
+            try
+            {
+                await RotateProxyAsync();
+                _browser.Load(url);
+                
+                // 等待加载完成
+                await Task.Delay(5000);
+                
+                if (_browser.IsLoading == false)
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"重试 {i + 1}/{maxRetries}: {ex.Message}");
+                
+                if (_currentProxy != null)
+                {
+                    _proxyPool.ReportFailure(_currentProxy);
+                }
+            }
+        }
+        
+        return false;
+    }
 }
 ```
 
@@ -1997,14 +2005,6 @@ public class ProxyPoolMonitor
     }
 }
 ```
-
-#### 5. 注意事项
-
-1. **代理来源合法性**：确保使用的代理服务是合法获得的
-2. **遵守目标网站规则**：使用代理池时仍需遵守目标网站的 robots.txt 和服务条款
-3. **速率限制**：即使使用代理池，也应该实施适当的请求速率限制
-4. **数据隐私**：使用第三方代理时，注意敏感数据可能被代理服务器记录
-5. **成本考虑**：高质量的代理服务通常需要付费，评估成本效益比
 
 ### 截图功能
 
