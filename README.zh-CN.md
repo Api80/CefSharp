@@ -1245,7 +1245,7 @@ public class CacheManager
         File.WriteAllText(batchScript, $@"
             @echo off
             echo 等待应用程序关闭...
-            timeout /t 3 /nobreak
+            timeout /t 5 /nobreak
             
             echo 删除缓存文件夹...
             rmdir /s /q ""{_cachePath}""
@@ -1503,6 +1503,12 @@ public class UserBrowserManager : Form
     
     private void SwitchUser_Click(object sender, EventArgs e)
     {
+        if (_userComboBox.SelectedItem == null)
+        {
+            MessageBox.Show("请先选择用户");
+            return;
+        }
+        
         string selectedUser = _userComboBox.SelectedItem.ToString();
         LoadUser(selectedUser);
         MessageBox.Show($"已切换到 {selectedUser}");
@@ -1651,13 +1657,25 @@ Cef.Initialize(settings);
 
 ### 代理设置
 
-**答案：是的！CefSharp 完全支持 SOCKS5 代理。**
+#### 基本代理配置
 
 CefSharp 支持以下代理协议：
 - **HTTP** - 标准 HTTP 代理
 - **SOCKS** - SOCKS 代理（等同于 SOCKS5）
 - **SOCKS4** - SOCKS4 代理
 - **SOCKS5** - SOCKS5 代理（推荐）
+
+#### 全局代理设置
+
+```csharp
+var settings = new CefSettings();
+settings.CefCommandLineArgs.Add("proxy-server", "http://proxy.example.com:8080");
+Cef.Initialize(settings);
+```
+
+### SOCKS5 代理支持
+
+**答案：是的！CefSharp 完全支持 SOCKS5 代理。**
 
 #### SOCKS5 基本配置
 
