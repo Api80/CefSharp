@@ -1,0 +1,28 @@
+# CefSharp Proxy Pool - Example Proxy List
+# 
+# Format:
+#   Simple:        host:port
+#   With scheme:   scheme://host:port
+#   With auth:     scheme://username:password@host:port
+#
+# Supported schemes: http, socks, socks4, socks5
+# Lines starting with # are comments and will be ignored
+
+# Example HTTP Proxies
+# http://proxy1.example.com:8080
+# http://proxy2.example.com:8080
+# http://proxy3.example.com:3128
+
+# Example SOCKS5 Proxies
+# socks5://socks-proxy1.example.com:1080
+# socks5://socks-proxy2.example.com:1080
+
+# Example Proxies with Authentication
+# http://username:password@auth-proxy1.example.com:8080
+# http://myuser:mypass@auth-proxy2.example.com:8080
+
+# Example SOCKS5 with Authentication
+# socks5://user:pass@socks-auth.example.com:1080
+
+# Note: Replace these example proxies with your actual proxy servers
+# For testing, you can use free proxy services, but be aware of their limitations
