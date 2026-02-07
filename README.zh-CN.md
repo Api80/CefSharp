@@ -24,6 +24,7 @@
   - [下载处理](#下载处理)
   - [右键菜单](#右键菜单)
   - [Cookie 管理](#cookie-管理)
+  - [缓存管理](#缓存管理)
   - [代理设置](#代理设置)
   - [SOCKS5 代理支持](#socks5-代理支持)
   - [商业代理服务配置](#商业代理服务配置)
@@ -1061,7 +1062,594 @@ public class CookieVisitor : ICookieVisitor
 }
 ```
 
-### SOCKS5 代理支持
+### 缓存管理
+
+CefSharp 使用 Chromium 的缓存系统来存储网页数据、Cookie、本地存储等。理解如何管理缓存对于构建高质量的应用程序至关重要。
+
+#### 缓存基础知识
+
+**缓存文件被锁定的原因：**
+
+当你使用 `Cef.Initialize()` 初始化 CefSharp 后，Chromium 会：
+1. 创建并锁定缓存目录中的文件（如 `data_1`、`index`、`f_000001` 等）
+2. 启动多个子进程（GPU 进程、网络进程、渲染进程等）
+3. 这些进程会持续访问缓存文件，直到 `Cef.Shutdown()` 被调用
+
+**因此，在应用程序运行期间：**
+- ❌ 无法更改全局缓存路径（路径在初始化时固定）
+- ❌ 无法删除缓存文件夹（文件被进程占用）
+- ✅ 可以清除缓存数据（使用 API，不删除文件）
+- ✅ 可以使用 RequestContext 实现独立的、可切换的缓存
+
+#### 方法一：清除缓存数据（不删除文件）
+
+使用 CefSharp API 清除缓存数据，而不是直接删除文件。这些操作不需要重启应用程序。
+
+**1. 清除 Cookie**
+
+```csharp
+// 获取 Cookie Manager
+var cookieManager = Cef.GetGlobalCookieManager();
+
+// 清除所有 Cookie（异步）
+await cookieManager.DeleteCookiesAsync();
+
+// 或者清除特定域名的 Cookie
+await cookieManager.DeleteCookiesAsync("https://www.example.com");
+
+// 或者清除特定 Cookie
+await cookieManager.DeleteCookiesAsync("https://www.example.com", "cookieName");
+```
+
+**2. 清除 HTTP 认证凭据**
+
+```csharp
+// 获取 RequestContext（全局或特定浏览器的）
+var requestContext = browser.RequestContext ?? Cef.GetGlobalRequestContext();
+
+// 清除 HTTP 认证凭据
+requestContext.ClearHttpAuthCredentials();
+```
+
+**3. 清除证书异常**
+
+```csharp
+var requestContext = browser.RequestContext ?? Cef.GetGlobalRequestContext();
+
+// 清除所有证书异常
+requestContext.ClearCertificateExceptions(null);
+
+// 建议同时关闭所有连接
+requestContext.CloseAllConnections(null);
+```
+
+**4. 使用 DevTools Protocol 清除特定类型的缓存**
+
+```csharp
+// 获取 DevTools 客户端
+var devToolsClient = browser.GetDevToolsClient();
+
+// 清除浏览器缓存
+await devToolsClient.Network.ClearBrowserCacheAsync();
+
+// 清除浏览器 Cookie
+await devToolsClient.Network.ClearBrowserCookiesAsync();
+
+// 清除数据（更全面的清理）
+await devToolsClient.Storage.ClearDataForOriginAsync(
+    origin: "https://www.example.com",
+    storageTypes: "cookies,local_storage,session_storage,cache_storage"
+);
+```
+
+**5. 完整的缓存清理示例**
+
+```csharp
+public async Task ClearAllCacheDataAsync(IWebBrowser browser)
+{
+    try
+    {
+        // 1. 清除 Cookie
+        var cookieManager = Cef.GetGlobalCookieManager();
+        await cookieManager.DeleteCookiesAsync();
+        
+        // 2. 清除 HTTP 认证凭据
+        var requestContext = browser.RequestContext ?? Cef.GetGlobalRequestContext();
+        requestContext.ClearHttpAuthCredentials();
+        
+        // 3. 清除证书异常
+        requestContext.ClearCertificateExceptions(null);
+        
+        // 4. 使用 DevTools 清除浏览器缓存
+        var devToolsClient = browser.GetDevToolsClient();
+        await devToolsClient.Network.ClearBrowserCacheAsync();
+        await devToolsClient.Network.ClearBrowserCookiesAsync();
+        
+        // 5. 关闭所有连接
+        requestContext.CloseAllConnections(null);
+        
+        MessageBox.Show("缓存数据已清除！");
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show($"清除缓存失败: {ex.Message}");
+    }
+}
+```
+
+#### 方法二：完全删除缓存文件（需要重启）
+
+如果你需要完全删除缓存文件夹，必须先关闭 CefSharp，然后才能删除文件。
+
+**步骤：**
+
+```csharp
+// 1. 关闭所有浏览器实例
+browser.Dispose();
+
+// 2. 等待所有浏览器关闭
+await Task.Delay(1000);
+
+// 3. 关闭 CefSharp
+Cef.Shutdown();
+
+// 4. 等待 CEF 完全关闭
+await Task.Delay(2000);
+
+// 5. 删除缓存文件夹
+string cachePath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "HSMS",
+    "CefCache"
+);
+
+if (Directory.Exists(cachePath))
+{
+    try
+    {
+        Directory.Delete(cachePath, recursive: true);
+        MessageBox.Show("缓存文件夹已删除！");
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show($"删除失败: {ex.Message}\n可能仍有进程在使用这些文件。");
+    }
+}
+
+// 6. 重新初始化 CEF（如果需要继续使用）
+// InitializeCef();
+```
+
+**完整的重启清理示例：**
+
+```csharp
+public class CacheManager
+{
+    private string _cachePath;
+    
+    public CacheManager(string cachePath)
+    {
+        _cachePath = cachePath;
+    }
+    
+    /// <summary>
+    /// 清除缓存并重启应用程序
+    /// </summary>
+    public void ClearCacheAndRestart()
+    {
+        // 保存当前应用程序路径
+        string appPath = Application.ExecutablePath;
+        
+        // 创建批处理脚本来删除缓存并重启应用
+        string batchScript = Path.Combine(Path.GetTempPath(), "clear_cache.bat");
+        File.WriteAllText(batchScript, $@"
+            @echo off
+            echo 等待应用程序关闭...
+            timeout /t 3 /nobreak
+            
+            echo 删除缓存文件夹...
+            rmdir /s /q ""{_cachePath}""
+            
+            echo 重启应用程序...
+            start """" ""{appPath}""
+            
+            del ""%~f0""
+        ");
+        
+        // 启动批处理脚本
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = batchScript,
+            CreateNoWindow = true,
+            UseShellExecute = false
+        });
+        
+        // 关闭当前应用程序
+        Application.Exit();
+    }
+}
+```
+
+#### 方法三：使用 RequestContext 实现可切换的缓存
+
+如果你需要在运行时切换不同的缓存，最好的方法是为每个浏览器实例使用独立的 `RequestContext`，而不是使用全局缓存。
+
+**1. 创建独立缓存的浏览器**
+
+```csharp
+public class MultiCacheBrowserManager
+{
+    private Dictionary<string, IRequestContext> _contexts = new Dictionary<string, IRequestContext>();
+    
+    /// <summary>
+    /// 创建使用特定缓存路径的浏览器
+    /// </summary>
+    public ChromiumWebBrowser CreateBrowserWithCache(string cacheName)
+    {
+        // 创建独立的缓存路径
+        string cachePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HSMS",
+            "CefCache",
+            cacheName
+        );
+        
+        // 创建或获取 RequestContext
+        if (!_contexts.ContainsKey(cacheName))
+        {
+            var settings = new RequestContextSettings
+            {
+                CachePath = cachePath,
+                PersistSessionCookies = true
+            };
+            
+            _contexts[cacheName] = new RequestContext(settings);
+        }
+        
+        // 创建浏览器
+        var browser = new ChromiumWebBrowser("https://www.google.com")
+        {
+            RequestContext = _contexts[cacheName]
+        };
+        
+        return browser;
+    }
+    
+    /// <summary>
+    /// 清除特定缓存的数据
+    /// </summary>
+    public async Task ClearCacheAsync(string cacheName)
+    {
+        if (_contexts.ContainsKey(cacheName))
+        {
+            var context = _contexts[cacheName];
+            
+            // 清除 Cookie
+            var cookieManager = context.GetCookieManager(null);
+            await cookieManager.DeleteCookiesAsync();
+            
+            // 清除其他凭据
+            context.ClearHttpAuthCredentials();
+            context.ClearCertificateExceptions(null);
+            context.CloseAllConnections(null);
+        }
+    }
+    
+    /// <summary>
+    /// 切换到不同的缓存
+    /// </summary>
+    public void SwitchCache(ChromiumWebBrowser browser, string newCacheName)
+    {
+        // 注意：无法直接更改现有浏览器的 RequestContext
+        // 需要创建新的浏览器实例
+        MessageBox.Show("要切换缓存，需要创建新的浏览器实例。");
+    }
+}
+
+// 使用示例
+var manager = new MultiCacheBrowserManager();
+
+// 创建使用 "user1" 缓存的浏览器
+var browser1 = manager.CreateBrowserWithCache("user1");
+
+// 创建使用 "user2" 缓存的浏览器
+var browser2 = manager.CreateBrowserWithCache("user2");
+
+// 清除 "user1" 的缓存数据
+await manager.ClearCacheAsync("user1");
+```
+
+**2. 使用隔离模式（Incognito/Private）**
+
+如果你不想保留任何缓存，可以使用隔离模式：
+
+```csharp
+// 创建隔离模式浏览器（内存缓存，关闭后自动清除）
+var settings = new RequestContextSettings
+{
+    CachePath = null  // null 表示使用内存缓存（隔离模式）
+};
+
+var requestContext = new RequestContext(settings);
+
+var browser = new ChromiumWebBrowser("https://www.google.com")
+{
+    RequestContext = requestContext
+};
+
+// 浏览器关闭后，所有数据都会自动清除
+```
+
+**3. 完整的多用户缓存管理示例**
+
+```csharp
+public class UserBrowserManager : Form
+{
+    private ComboBox _userComboBox;
+    private Button _switchUserButton;
+    private Button _clearCacheButton;
+    private Panel _browserPanel;
+    private ChromiumWebBrowser _currentBrowser;
+    private Dictionary<string, RequestContextSettings> _userContexts;
+    
+    public UserBrowserManager()
+    {
+        InitializeUI();
+        InitializeContexts();
+    }
+    
+    private void InitializeUI()
+    {
+        this.Text = "多用户浏览器管理";
+        this.Size = new Size(1200, 800);
+        
+        // 用户选择
+        _userComboBox = new ComboBox
+        {
+            Location = new Point(10, 10),
+            Size = new Size(200, 25),
+            DropDownStyle = ComboBoxStyle.DropDownList
+        };
+        _userComboBox.Items.AddRange(new object[] { "用户1", "用户2", "用户3", "隔离模式" });
+        _userComboBox.SelectedIndex = 0;
+        
+        // 切换用户按钮
+        _switchUserButton = new Button
+        {
+            Location = new Point(220, 10),
+            Size = new Size(100, 25),
+            Text = "切换用户"
+        };
+        _switchUserButton.Click += SwitchUser_Click;
+        
+        // 清除缓存按钮
+        _clearCacheButton = new Button
+        {
+            Location = new Point(330, 10),
+            Size = new Size(100, 25),
+            Text = "清除缓存"
+        };
+        _clearCacheButton.Click += ClearCache_Click;
+        
+        // 浏览器面板
+        _browserPanel = new Panel
+        {
+            Location = new Point(10, 45),
+            Size = new Size(1170, 700),
+            BorderStyle = BorderStyle.FixedSingle
+        };
+        
+        this.Controls.Add(_userComboBox);
+        this.Controls.Add(_switchUserButton);
+        this.Controls.Add(_clearCacheButton);
+        this.Controls.Add(_browserPanel);
+        
+        // 加载初始用户
+        LoadUser("用户1");
+    }
+    
+    private void InitializeContexts()
+    {
+        _userContexts = new Dictionary<string, RequestContextSettings>();
+        
+        // 为每个用户创建独立的缓存路径
+        for (int i = 1; i <= 3; i++)
+        {
+            string cachePath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "HSMS",
+                "CefCache",
+                $"User{i}"
+            );
+            
+            _userContexts[$"用户{i}"] = new RequestContextSettings
+            {
+                CachePath = cachePath,
+                PersistSessionCookies = true
+            };
+        }
+        
+        // 隔离模式（内存缓存）
+        _userContexts["隔离模式"] = new RequestContextSettings
+        {
+            CachePath = null  // 内存缓存
+        };
+    }
+    
+    private void LoadUser(string userName)
+    {
+        // 清理现有浏览器
+        if (_currentBrowser != null)
+        {
+            _browserPanel.Controls.Remove(_currentBrowser);
+            _currentBrowser.Dispose();
+        }
+        
+        // 创建新的 RequestContext
+        var settings = _userContexts[userName];
+        var requestContext = new RequestContext(settings);
+        
+        // 创建新浏览器
+        _currentBrowser = new ChromiumWebBrowser("https://www.google.com")
+        {
+            Dock = DockStyle.Fill,
+            RequestContext = requestContext
+        };
+        
+        _browserPanel.Controls.Add(_currentBrowser);
+        
+        this.Text = $"多用户浏览器管理 - 当前用户: {userName}";
+    }
+    
+    private void SwitchUser_Click(object sender, EventArgs e)
+    {
+        string selectedUser = _userComboBox.SelectedItem.ToString();
+        LoadUser(selectedUser);
+        MessageBox.Show($"已切换到 {selectedUser}");
+    }
+    
+    private async void ClearCache_Click(object sender, EventArgs e)
+    {
+        if (_currentBrowser == null) return;
+        
+        try
+        {
+            _clearCacheButton.Enabled = false;
+            
+            // 清除 Cookie
+            var cookieManager = _currentBrowser.RequestContext.GetCookieManager(null);
+            await cookieManager.DeleteCookiesAsync();
+            
+            // 清除凭据
+            _currentBrowser.RequestContext.ClearHttpAuthCredentials();
+            _currentBrowser.RequestContext.ClearCertificateExceptions(null);
+            
+            // 使用 DevTools 清除缓存
+            var devToolsClient = _currentBrowser.GetDevToolsClient();
+            await devToolsClient.Network.ClearBrowserCacheAsync();
+            
+            // 关闭连接
+            _currentBrowser.RequestContext.CloseAllConnections(null);
+            
+            MessageBox.Show("缓存已清除！");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"清除缓存失败: {ex.Message}");
+        }
+        finally
+        {
+            _clearCacheButton.Enabled = true;
+        }
+    }
+    
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (_currentBrowser != null)
+        {
+            _currentBrowser.Dispose();
+        }
+        base.OnFormClosing(e);
+    }
+}
+```
+
+#### 缓存管理最佳实践
+
+**1. 开发阶段**
+- 使用隔离模式（`CachePath = null`）进行测试，避免缓存干扰
+- 或者为开发环境使用单独的缓存路径
+
+**2. 生产环境**
+- 使用持久化缓存提高性能
+- 定期清理缓存数据（使用 API，不删除文件）
+- 为不同用户使用不同的 RequestContext
+
+**3. 多用户应用**
+- 每个用户使用独立的 RequestContext 和缓存路径
+- 用户登出时清除该用户的缓存数据
+
+**4. 缓存大小控制**
+- Chromium 会自动管理缓存大小
+- 如果需要手动控制，可以使用 DevTools Protocol
+
+#### 常见问题
+
+**Q1: 为什么不能直接删除缓存文件夹？**
+
+A: Chromium 的多进程架构会持续访问缓存文件。在 Windows 上，文件被进程打开时无法删除。必须先调用 `Cef.Shutdown()` 关闭所有进程。
+
+**Q2: 如何在不重启应用的情况下清除缓存？**
+
+A: 使用 CefSharp API（如 `DeleteCookiesAsync`、`ClearBrowserCacheAsync` 等）清除缓存数据，而不是删除文件。这不需要重启应用程序。
+
+**Q3: 如何为不同用户使用不同的缓存？**
+
+A: 为每个用户创建独立的 `RequestContext`，每个 RequestContext 使用不同的 `CachePath`。不要使用全局缓存。
+
+**Q4: 隔离模式会完全不保存数据吗？**
+
+A: 是的。当 `RequestContextSettings.CachePath` 设置为 `null` 时，所有数据都存储在内存中，浏览器关闭后会自动清除。
+
+**Q5: 清除缓存后需要重新加载页面吗？**
+
+A: 建议清除缓存后调用 `browser.Reload(true)` 强制刷新页面，以确保使用最新数据。
+
+**Q6: 如何监控缓存大小？**
+
+A: 可以使用 `DirectoryInfo` 检查缓存文件夹大小：
+
+```csharp
+public long GetCacheSizeInBytes(string cachePath)
+{
+    if (!Directory.Exists(cachePath))
+        return 0;
+    
+    var dirInfo = new DirectoryInfo(cachePath);
+    return dirInfo.EnumerateFiles("*", SearchOption.AllDirectories)
+                  .Sum(file => file.Length);
+}
+
+// 使用
+long sizeBytes = GetCacheSizeInBytes(cachePath);
+double sizeMB = sizeBytes / (1024.0 * 1024.0);
+Console.WriteLine($"缓存大小: {sizeMB:F2} MB");
+```
+
+**Q7: 如何在程序启动时自动清理旧缓存？**
+
+A: 在初始化 CEF 之前检查并清理：
+
+```csharp
+private void CleanOldCacheIfNeeded(string cachePath)
+{
+    if (!Directory.Exists(cachePath))
+        return;
+    
+    try
+    {
+        var dirInfo = new DirectoryInfo(cachePath);
+        var cacheAge = DateTime.Now - dirInfo.LastWriteTime;
+        
+        // 如果缓存超过 7 天，删除它
+        if (cacheAge.TotalDays > 7)
+        {
+            Directory.Delete(cachePath, recursive: true);
+            Console.WriteLine("已删除过期缓存");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"清理缓存失败: {ex.Message}");
+    }
+}
+
+// 在 Cef.Initialize() 之前调用
+CleanOldCacheIfNeeded(cachePath);
+Cef.Initialize(settings);
+```
+
+### 代理设置
 
 **答案：是的！CefSharp 完全支持 SOCKS5 代理。**
 
